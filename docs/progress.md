@@ -118,8 +118,37 @@ per-auction HMAC pseudonyms; unit + fast-check model-based tests for invariants 
 
 **Still unverified:** everything on real Cloudflare (deploy pending on your side).
 
-## Next: Day 4 (persistence integration)
+## Day 3 plan for Day 4 (kept for reference)
 
 Replace the DO's Day-1 minimal engine with `@bike/domain` exactly as in architecture.md › Day-4 integration
 plan: durable idempotency table, pseudonym table, all events through the outbox, alarm multiplexer driving
 `tick`, HTTP bid endpoint with Idempotency-Key, public events over WS.
+
+## Day 4 (12 Oct 2026): live bidding backend, complete locally
+
+**Done:** AuctionDO rebuilt on `@bike/domain` (schema v2); atomic commit with seq-contiguity guard; durable
+idempotency (24 h + GC timer); per-auction pseudonyms table; alarm multiplexer (lifecycle/outbox/idem-gc) with
+restart recovery; D1 read models (`0003`) via atomic batch with monotonic guards and sync-status tracking; HTTP API
+(`GET /auctions/:id`, `GET /auctions/:id/bids` cursor, `POST /auctions/:id/bids` with Idempotency-Key, stream);
+admin auction API with audit log and per-auction anti-sniping switch; WS protocol v1 (buyer-safe snapshot, public
+events, `you.outbid`, resync); client ordering reducer with gap detection; `BID_RATE_LIMIT` binding;
+`PSEUDONYM_SECRET` (deploy script generates it). Docs: `docs/api.md`, `docs/database.md`, architecture update.
+
+**Tests (real runs):** `pnpm check` green in 106 s: **234 tests** (domain 120, contracts 3, web 9, worker 102).
+Worker scenarios: 50 identical bids → 1 accepted; 200 concurrent random bids → strictly increasing gap-free
+ledger = state; two auctions in parallel; replay/conflict/rejection-replay/per-user scope; retry after lost
+response (HTTP); D1 down → bids accepted, failures tracked, backoff, alarm retry, convergence; stale projection
+cannot overwrite newer; eviction recovery incl. idempotency; lost timers re-armed; auto start/close via alarm;
+duplicate alarm runs → one `auction.ended`; lazy close; reserve outcomes; anti-sniping on/off; cancel rules;
+WS: CSWSH, strict contract on every message, extensions/cancel ordered without gaps, outbid only to the outbid
+user, reconnection snapshot, resync, hibernation; authn/authz on bids and admin routes.
+
+**Test changes (deliberate):** Day-1 DO tests rewritten for the new API (same scenarios kept); authz matrix
+"ADMIN allowed" now means "not 401/403" because parameterised admin routes exist; WS snapshot shape changed to
+`{view}`.
+
+**Still unverified:** real Cloudflare behaviour (you run `pnpm deploy`).
+
+## Next: Day 5
+
+Motorcycle catalogue (D1 + R2 images), auction list endpoint from `auctions_rm`, admin listing UI.

@@ -36,7 +36,7 @@ function call(method: string, path: string, cookie?: string) {
 
 describe("authorization matrix: every /admin route", () => {
   it("has admin endpoints to test", () => {
-    expect(ADMIN_ENDPOINTS.length).toBeGreaterThanOrEqual(2);
+    expect(ADMIN_ENDPOINTS.length).toBeGreaterThanOrEqual(8);
   });
 
   it.each(ADMIN_ENDPOINTS)("$method $path → anonymous 401", async ({ method, path }) => {
@@ -47,9 +47,14 @@ describe("authorization matrix: every /admin route", () => {
     expect((await call(method, path, userCookie)).status).toBe(403);
   });
 
-  it.each(ADMIN_ENDPOINTS)("$method $path → ADMIN allowed", async ({ method, path }) => {
-    expect((await call(method, path, adminCookie)).status).toBe(200);
-  });
+  // Day 4: parameterised and body-taking admin routes exist, so "allowed" means "not 401/403"
+  // (a literal ":id" path or a missing body is a 404/422 from the handler, after authorization).
+  it.each(ADMIN_ENDPOINTS)(
+    "$method $path → ADMIN passes authorization",
+    async ({ method, path }) => {
+      expect([401, 403]).not.toContain((await call(method, path, adminCookie)).status);
+    },
+  );
 
   it("forged role cookies/headers do not grant access", async () => {
     const res = await call("GET", "/api/v1/admin/overview", `${userCookie}; role=ADMIN`);

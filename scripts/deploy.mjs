@@ -81,6 +81,7 @@ if (patched !== cfg) {
 const secrets = existsSync(secretsFile) ? JSON.parse(readFileSync(secretsFile, "utf8")) : {};
 secrets.BETTER_AUTH_SECRET ??= randomBytes(32).toString("base64url");
 secrets.SEED_TOKEN ??= randomBytes(24).toString("base64url");
+secrets.PSEUDONYM_SECRET ??= randomBytes(32).toString("base64url");
 const siteKey = flag("turnstile-site-key") ?? secrets.TURNSTILE_SITE_KEY ?? TEST_SITE_KEY;
 secrets.TURNSTILE_SECRET_KEY =
   flag("turnstile-secret-key") ?? secrets.TURNSTILE_SECRET_KEY ?? TEST_SECRET_KEY;
@@ -118,6 +119,7 @@ writeFileSync(
   JSON.stringify({
     BETTER_AUTH_SECRET: secrets.BETTER_AUTH_SECRET,
     SEED_TOKEN: secrets.SEED_TOKEN,
+    PSEUDONYM_SECRET: secrets.PSEUDONYM_SECRET,
     TURNSTILE_SECRET_KEY: secrets.TURNSTILE_SECRET_KEY,
   }),
 );

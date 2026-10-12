@@ -27,6 +27,21 @@ describe("contracts", () => {
     expect(
       WsServerMessage.safeParse({
         protocolVersion: WS_PROTOCOL_VERSION,
+        type: "bid.accepted",
+        seq: 4,
+        bidId: "b",
+        bidder: "Bidder K7Q2",
+        amountMinor: 100,
+        at: 1,
+        closesAt: 2,
+        minNextBidMinor: 200,
+        reserveMet: true,
+        userId: "leak",
+      }).success,
+    ).toBe(false); // strict: extra fields such as user ids are rejected
+    expect(
+      WsServerMessage.safeParse({
+        protocolVersion: WS_PROTOCOL_VERSION,
         type: "hello",
         serverTime: 1,
       }).success,

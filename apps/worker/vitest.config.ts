@@ -18,10 +18,18 @@ export default defineConfig(async () => {
             // Cloudflare's documented always-pass Turnstile test secret; siteverify is mocked in tests.
             TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
             SEED_TOKEN: "test-seed-token-0123456789abcdef",
+            PSEUDONYM_SECRET: "test-pseudonym-secret-0123456789abcdef",
           },
         },
       }),
     ],
-    test: { setupFiles: ["./test/apply-migrations.ts"] },
+    test: {
+      setupFiles: ["./test/apply-migrations.ts"],
+      // Files run one at a time: parallel runs on a 2-core machine hung intermittently (Day 4);
+      // sequential is slower (~2 min) but deterministic for CI.
+      fileParallelism: false,
+      testTimeout: 30_000,
+      hookTimeout: 30_000,
+    },
   };
 });

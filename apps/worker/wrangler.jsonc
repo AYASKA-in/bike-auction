@@ -44,6 +44,8 @@
   // Coarse, per-location, eventually consistent edge limits (BLUEPRINT §7.5).
   "ratelimits": [
     { "name": "AUTH_RATE_LIMIT", "namespace_id": "4101", "simple": { "limit": 20, "period": 60 } },
+    // Coarse per-user bid limit at the edge; the exact per-auction throttle lives in AuctionDO.
+    { "name": "BID_RATE_LIMIT", "namespace_id": "4102", "simple": { "limit": 30, "period": 10 } },
   ],
 
   // Top-level config is PRODUCTION-SAFE by default. Local development overrides these values in

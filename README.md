@@ -4,8 +4,9 @@ Real-time auctions for used and repossessed two-wheelers. Each auction is run by
 Cloudflare Durable Object, so concurrent bids get a single, provable order. Built on free Cloudflare
 infrastructure. Design: [`BLUEPRINT.md`](BLUEPRINT.md) · Status: [`docs/progress.md`](docs/progress.md).
 
-> **Status: Day 3 of 10.** Foundation, accounts, roles and the auction rules engine are in place; wiring the
-> engine into the live auction object, the catalogue and the bidding UI follow.
+> **Status: Day 4 of 10.** Accounts, roles, the auction rules engine and the real-time bidding backend
+> (atomic bids, idempotency, alarms, D1 sync, WebSockets) are in place. API: [`docs/api.md`](docs/api.md).
+> Catalogue and bidding UI follow.
 
 ## Demo accounts
 

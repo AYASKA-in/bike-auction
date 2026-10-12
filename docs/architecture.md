@@ -87,7 +87,7 @@ Rules, lifecycle, reserve, soft close, events, idempotency and pseudonyms are sp
   with seeds 1, 42, 987654, 31337 × 3000 runs. Reproduce with `FC_SEED`, `FC_PATH`, `FC_RUNS`.
 - Coverage (`pnpm --filter @bike/domain test:coverage`, thresholds 90%): 98.3% statements, 97.9% branches, 100% functions.
 
-### Day-4 integration plan (not yet wired)
+### Day-4 integration (implemented, see below)
 
 Inside `AuctionDO.placeBid`, with **no await between read and commit**:
 
@@ -100,3 +100,33 @@ Inside `AuctionDO.placeBid`, with **no await between read and commit**:
 5. after commit: map events with `toPublicEvent` (pseudonyms via HMAC adapter, cached per auction in a
    `pseudonyms` table) and broadcast; `waitUntil(drainOutbox())`.
    Alarm handler: `tick(state, now)`; commit its events the same way. GC idempotency rows older than 24 h via a timer.
+
+## Live bidding backend (Day 4)
+
+`AuctionDO` now delegates every rule to `@bike/domain`; the Day-1 rule code is gone (one implementation).
+
+**Bid path:** HMAC pseudonym digest (async, before reading state) → read state → `resolveIdempotency`
+(replay/conflict return immediately) → per-user throttle (new commands only) → `placeBid` (pure) → one
+`transactionSync`: state, events (= outbox), bid row, idempotency record, pseudonym, timers → broadcast public
+events + targeted `you.outbid` → `waitUntil(drainOutbox)`. No await between read and commit.
+
+**Lifecycle:** `lifecycle` timer = startsAt (SCHEDULED) or closesAt (LIVE, moved by every extension). Alarm and
+every read/command run `tick` and commit due transitions; `tick` is idempotent, so at-least-once alarms and lazy
+reads cannot duplicate `auction.ended`. Admin create/edit/schedule/cancel go through the same commit path.
+
+**Recovery:** constructor re-arms missing lifecycle/outbox/idem-gc timers; state is cached in memory only after a
+successful commit; WebSockets hibernate and survive eviction.
+
+**D1 sync:** coalesced drain → one atomic D1 batch (summary + bid rows + per-user rows) → mark projected up to the
+batch's last seq. Failure: attempts++, `sync_status` updated, exponential backoff timer (1 s … 60 s). Ops view:
+`GET /admin/auctions/:id` → `ops` (seq, projectedSeq, pendingOutbox, oldestPendingAgeMs, sync, timers).
+
+## Known limitations (Day 4)
+
+- Nothing verified on real Cloudflare yet (deploy pending): CPU limits, alarm timing, WS limits, D1 latency.
+- Per-user per-auction throttle (10 / 10 s) is in-memory: exact per instance, resets on eviction.
+- `auction.created/updated` are not broadcast; a client watching a SCHEDULED auction that an admin edits sees a
+  seq gap and resyncs (by design).
+- Projection lag/failures are visible in ops and logs; Analytics Engine metrics and alerting are Day 8.
+- Soft-close boundaries are proven at the domain level (ms-exact); DO tests check integration with real time.
+- Worker test files run sequentially (parallel runs on 2 cores hung intermittently; root cause not isolated).

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { AppError } from "../lib/problem";
 import { requireAdmin } from "../middleware/session";
+import { adminAuctionRoutes } from "./admin-auctions";
 import type { AppEnv } from "../types";
 
 /**
@@ -40,3 +41,5 @@ adminRoutes.get("/security-events", async (c) => {
   const items = rows.results as { createdAt: number }[];
   return c.json({ items, nextBefore: items.length === limit ? items.at(-1)!.createdAt : null });
 });
+
+adminRoutes.route("/", adminAuctionRoutes);
