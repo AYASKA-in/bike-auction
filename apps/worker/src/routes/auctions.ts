@@ -15,7 +15,7 @@ function auctionStub(env: Env, id: string) {
 auctionRoutes.get("/:id/snapshot", async (c) => {
   const id = AuctionId.safeParse(c.req.param("id"));
   if (!id.success) throw new AppError("NOT_FOUND");
-  const snap = await auctionStub(c.env, id.data).getSnapshot();
+  const snap = await auctionStub(c.env, id.data).getPublicSnapshot();
   if (!snap) throw new AppError("NOT_FOUND", "Auction not found");
   c.header("Cache-Control", "no-store");
   return c.json(snap);

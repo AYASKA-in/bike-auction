@@ -4,7 +4,8 @@ Real-time auctions for used and repossessed two-wheelers. Each auction is run by
 Cloudflare Durable Object, so concurrent bids get a single, provable order. Built on free Cloudflare
 infrastructure. Design: [`BLUEPRINT.md`](BLUEPRINT.md) · Status: [`docs/progress.md`](docs/progress.md).
 
-> **Status: Day 2 of 10.** Foundation, accounts and roles are in place; the catalogue and bidding UI follow.
+> **Status: Day 3 of 10.** Foundation, accounts, roles and the auction rules engine are in place; wiring the
+> engine into the live auction object, the catalogue and the bidding UI follow.
 
 ## Demo accounts
 
@@ -26,7 +27,7 @@ React 19 · Vite 8 · Tailwind CSS 4 · TanStack Router/Query · Hono on Cloudfl
 ```
 apps/web          React SPA (served as Workers static assets, same origin as the API)
 apps/worker       Hono API, AuctionDO, PasswordHasherDO, D1 migrations, Worker tests
-packages/domain   Pure auction rules (money, increment ladder, clock); no Cloudflare imports
+packages/domain   Pure auction engine: lifecycle, bids, reserve, soft close, idempotency, pseudonyms (ADR 004)
 packages/contracts Zod schemas shared by API, WebSocket protocol and UI
 docs/             architecture, ADRs, spike results, assumptions, progress
 ```
@@ -51,7 +52,9 @@ Try: `curl http://localhost:8787/api/v1/health` and `curl http://localhost:8787/
 
 ```bash
 pnpm check          # format, lint, typecheck, build, all tests
-pnpm test           # unit tests + Worker integration tests inside workerd
+pnpm test           # unit, property-based and Worker integration tests (inside workerd)
+pnpm --filter @bike/domain test:coverage   # domain coverage report (90% thresholds)
+FC_SEED=42 FC_RUNS=3000 pnpm --filter @bike/domain test   # longer property-test run
 pnpm --filter @bike/worker spike:auth   # optional: password-hashing latency spike against wrangler dev
 ```
 

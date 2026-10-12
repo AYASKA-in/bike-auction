@@ -33,6 +33,8 @@ export type AuctionSnapshot = {
   serverTime: number;
 };
 
+export type PublicSnapshot = Omit<AuctionSnapshot, "leaderUserId"> & { hasLeader: boolean };
+
 export type PlaceBidCommand = { bidId: string; userId: string; amountMinor: number };
 
 export type PlaceBidResult =
@@ -70,6 +72,9 @@ export class AuctionDO extends DurableObject<Env> {
     // The constructor completes before any request or alarm is delivered, and SQL calls are
     // synchronous, so the schema is guaranteed current for every handler.
     migrateAuctionSchema(ctx.storage);
+    // Self-heal: every pending outbox event must have a scheduled retry. Covers any crash window
+    // and objects created before timers were written inside the commit transaction (Day-3 fix).
+    if (this.pendingOutbox() > 0 && !this.hasTimer("outbox")) this.setTimer("outbox", Date.now());
     // Heartbeats are answered by the runtime without waking a hibernated object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(WS_PING, WS_PONG));
   }
@@ -96,12 +101,24 @@ export class AuctionDO extends DurableObject<Env> {
         );
         this.appendOutbox(1, "auction.created");
         this.setTimer("close", input.closesAt);
+        this.setTimer("outbox", Date.now()); // same transaction as the outbox row
       });
-      this.setTimer("outbox", Date.now());
     }
     return this.snapshot();
   }
 
+  /**
+   * Buyer-safe snapshot: no raw user ids (Day-3 privacy fix). Per-auction pseudonyms for the
+   * leader arrive with the domain-engine integration (Day 4).
+   */
+  getPublicSnapshot(): PublicSnapshot | null {
+    const snap = this.getSnapshot();
+    if (!snap) return null;
+    const { leaderUserId, ...rest } = snap;
+    return { ...rest, hasLeader: leaderUserId !== null };
+  }
+
+  /** Internal (server-side) snapshot. Contains user ids: never return it to clients. */
   getSnapshot(): AuctionSnapshot | null {
     return this.readState() ? this.snapshot() : null;
   }
@@ -148,6 +165,7 @@ export class AuctionDO extends DurableObject<Env> {
         seq,
       );
       this.appendOutbox(seq, "bid.accepted");
+      this.setTimer("outbox", Date.now()); // same transaction as the outbox row
     });
     // ── committed ──
     const next = minNextBid({
@@ -165,7 +183,6 @@ export class AuctionDO extends DurableObject<Env> {
       closesAt: s.closes_at,
       minNextBidMinor: next,
     });
-    this.setTimer("outbox", Date.now());
     this.ctx.waitUntil(this.drainOutbox());
     return {
       ok: true,
@@ -234,6 +251,10 @@ export class AuctionDO extends DurableObject<Env> {
     this.rescheduleAlarm();
   }
 
+  private hasTimer(kind: TimerKind): boolean {
+    return this.sql.exec(`SELECT 1 FROM timers WHERE kind = ?`, kind).toArray().length > 0;
+  }
+
   private clearTimer(kind: TimerKind): void {
     this.sql.exec(`DELETE FROM timers WHERE kind = ?`, kind);
   }
@@ -254,8 +275,8 @@ export class AuctionDO extends DurableObject<Env> {
       this.sql.exec(`UPDATE state SET status = 'ENDED', seq = ? WHERE id = 1`, seq);
       this.appendOutbox(seq, "auction.ended");
       this.clearTimer("close");
+      this.setTimer("outbox", now); // same transaction as the outbox row
     });
-    this.setTimer("outbox", now);
   }
 
   // ───────────────────────────── Outbox → D1 projection ─────────────────────────────
@@ -346,7 +367,7 @@ export class AuctionDO extends DurableObject<Env> {
         serverTime: Date.now(),
       }),
     );
-    const snap = this.getSnapshot();
+    const snap = this.getPublicSnapshot();
     if (snap)
       server.send(
         JSON.stringify({ protocolVersion: WS_PROTOCOL_VERSION, type: "auction.snapshot", ...snap }),

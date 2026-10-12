@@ -1,4 +1,4 @@
-import type { Paise } from "./money";
+import { safeAdd, type Paise } from "./money";
 
 /**
  * Bid increment ladder: the minimum increment depends on the current price band.
@@ -7,12 +7,21 @@ import type { Paise } from "./money";
 export type LadderBand = { readonly upToMinor: Paise | null; readonly incrementMinor: Paise };
 export type IncrementLadder = readonly LadderBand[];
 
-/** Default ladder for used two-wheelers (see BLUEPRINT §4.3). */
+/**
+ * Default ladder for used two-wheelers (BLUEPRINT §4.3). `upToMinor` is an EXCLUSIVE upper bound
+ * on the current price. Exact boundaries (see docs/adr/004-auction-rules.md):
+ *   price <  ₹25,000.00            → ₹250
+ *   ₹25,000.00 ≤ price < ₹1,00,000 → ₹500
+ *   ₹1,00,000 ≤ price ≤ ₹3,00,000  → ₹1,000   ("through ₹3,00,000": inclusive)
+ *   price >  ₹3,00,000.00          → ₹2,500
+ * Day-3 correction: the Day-1 ladder used `< ₹3,00,000` for the third band, which charged ₹2,500 at
+ * exactly ₹3,00,000. The blueprint says "through", so the bound is ₹3,00,000.01 (30_000_001 paise).
+ */
 export const DEFAULT_LADDER: IncrementLadder = [
-  { upToMinor: 2_500_000, incrementMinor: 25_000 }, // < ₹25,000 → ₹250
-  { upToMinor: 10_000_000, incrementMinor: 50_000 }, // < ₹1,00,000 → ₹500
-  { upToMinor: 30_000_000, incrementMinor: 100_000 }, // < ₹3,00,000 → ₹1,000
-  { upToMinor: null, incrementMinor: 250_000 }, // ≥ ₹3,00,000 → ₹2,500
+  { upToMinor: 2_500_000, incrementMinor: 25_000 },
+  { upToMinor: 10_000_000, incrementMinor: 50_000 },
+  { upToMinor: 30_000_001, incrementMinor: 100_000 },
+  { upToMinor: null, incrementMinor: 250_000 },
 ];
 
 export function validateLadder(ladder: IncrementLadder): void {
@@ -49,5 +58,5 @@ export function minNextBid(
   ladder: IncrementLadder = DEFAULT_LADDER,
 ): Paise {
   if (input.currentPriceMinor === null) return input.startPriceMinor;
-  return input.currentPriceMinor + incrementFor(input.currentPriceMinor, ladder);
+  return safeAdd(input.currentPriceMinor, incrementFor(input.currentPriceMinor, ladder));
 }

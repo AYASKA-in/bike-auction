@@ -77,7 +77,49 @@
 - Deployment: run `pnpm deploy` in your own terminal (wrangler cannot reach Cloudflare from my environments).
 - After the gate passes: create a Turnstile widget and re-run deploy with the real keys.
 
-## Next: Day 3 (domain engine)
+## Day 2 plan for Day 3 (kept for reference)
 
 Pure `@bike/domain` auction engine: lifecycle commands, reserve, bounded soft close, idempotency semantics,
 per-auction HMAC pseudonyms; unit + fast-check model-based tests for invariants A–J.
+
+## Day 3 (12 Oct 2026): auction rules engine, complete
+
+**Done**
+
+- `packages/domain/src/auction/`: pure engine (lifecycle, bidding, reserve, bounded soft close, cancellation),
+  typed events with contiguous seq, structured errors, idempotency decisions (24 h retention), per-auction HMAC
+  pseudonyms, allow-listed public view/events. No Cloudflare/Hono/React imports; time and identity injected.
+- Money hardening: ₹1 crore ceiling, `safeAdd`/`safeMultiply`. Ladder boundary corrected at ₹3,00,000 (ADR 004).
+- `@bike/contracts`: strict `PublicAuctionView`, `PublicAuctionEvent`, `PlaceBidBody`, idempotency header; WS
+  protocol v1 extended additively (`auction.extended/started/cancelled/ended`, optional `reserveMet`); new error
+  codes (BID_INVALID_AMOUNT, ALREADY_LEADING, INVALID_TRANSITION).
+- Worker: Web Crypto HMAC adapter for pseudonyms.
+
+**Bugs found and fixed (regression tests written first, observed failing)**
+
+1. _Privacy:_ `GET /auctions/:id/snapshot` and the WS `auction.snapshot` exposed the leader's raw user id.
+   Now `getPublicSnapshot()` (no user ids). Tests: `test/regressions-day3.test.ts`.
+2. _Durability:_ the outbox retry timer was written after the commit transaction; a crash in between could
+   strand D1 projection until the next bid. Timers now commit in the same transaction, and the constructor
+   self-heals a pending outbox without a timer. Test: same file (simulated lost timer + eviction).
+3. _Engine (caught by unit test):_ bids above the ₹1 crore ceiling were classified as BID_INVALID_AMOUNT instead
+   of BID_UNREASONABLE.
+4. _Test-quality:_ scenario coverage counters showed the default property run never generated a soft-close
+   extension; added a "jump near close" generator so anti-sniping is exercised in every CI run.
+
+**Verification (real runs)**
+
+- `pnpm check` green: **180 tests** (domain 120, contracts 3, web 3, worker 54), up from 68.
+  Pre-existing tests all pass; one Day-1 assertion (ladder at ₹3,00,000) changed deliberately.
+- Model-based property: seed 20261012 × 400 runs (CI) + seeds 1, 42, 987654, 31337 × 3000 runs: all passed.
+- Domain coverage: 98.26% statements, 97.9% branches, 100% functions, 98.83% lines.
+- Worker concurrency suite re-run after DO changes: 50 identical bids → 1 accepted; 200 random bids → consistent
+  ledger; eviction recovery; WS hibernation: all pass.
+
+**Still unverified:** everything on real Cloudflare (deploy pending on your side).
+
+## Next: Day 4 (persistence integration)
+
+Replace the DO's Day-1 minimal engine with `@bike/domain` exactly as in architecture.md › Day-4 integration
+plan: durable idempotency table, pseudonym table, all events through the outbox, alarm multiplexer driving
+`tick`, HTTP bid endpoint with Idempotency-Key, public events over WS.

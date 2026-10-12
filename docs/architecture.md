@@ -36,8 +36,67 @@ client ──HTTP──▶ Worker ──RPC──▶ AuctionDO.placeBid()
 | Client missed events        | snapshot on (re)connect; `seq` gap detection                    | snapshot tested; client logic Day 6 |
 | Duplicate HTTP retries      | Idempotency-Key per (user, key)                                 | Day 4                               |
 
-## Invariants (BLUEPRINT §4.8): coverage so far
+## Invariants: Day-1 coverage (superseded below)
 
 - **B** accepted bid ≥ minimum: tested · **D** leader = top of ledger: tested · **E** seq gap-free: tested
 - **A** no bid at/after close: tested (lazy close) · **I** price never decreases: tested
 - **C, F, G, H, J**: Day 3–4 (domain engine, idempotency, auth); J partially (projection convergence tested)
+
+## Auction domain engine (Day 3)
+
+Rules, lifecycle, reserve, soft close, events, idempotency and pseudonyms are specified in
+[ADR 004](adr/004-auction-rules.md) and implemented as pure functions in `packages/domain/src/auction/`:
+
+| Module           | Responsibility                                                                                                              |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `engine.ts`      | `createAuction`, `updateTerms`, `schedule`, `tick`, `placeBid`, `cancel`, `minNextBidFor`, `maxAcceptableBid`, `outcomeFor` |
+| `config.ts`      | defaults (soft close 2/2/30 min, 3× limit, ₹1 crore ceiling), term and rule validation                                      |
+| `events.ts`      | typed internal events with contiguous `seq`                                                                                 |
+| `views.ts`       | allow-listed public view and public events (no reserve, no user ids)                                                        |
+| `idempotency.ts` | fingerprint, `resolveIdempotency`, stored results, 24 h retention                                                           |
+| `pseudonym.ts`   | HMAC-based per-auction bidder codes with collision growth                                                                   |
+
+### Invariant coverage
+
+| Invariant                        | Where it is proven                                                                     |
+| -------------------------------- | -------------------------------------------------------------------------------------- |
+| A no bid at/after close          | unit boundary tests (−1/0/+1 ms) + model property (every acceptance `at < closesAt`)   |
+| B accepted ≥ minimum at commit   | model property (checked against the model's pre-state minimum)                         |
+| C one effect per idempotency key | model property (retries add no accepted bids; replays equal first result) + unit tests |
+| D leader/price match ledger      | model property + Worker test (200 concurrent bids)                                     |
+| E contiguous seq                 | model property (committed log seq = index + 1) + Worker test                           |
+| F terminal states                | unit tests (all commands rejected) + model property (terminal event is last)           |
+| G closesAt ≤ hardCloseAt         | soft-close unit tests + model property every step                                      |
+| H price never decreases          | model property (strictly increasing ledger)                                            |
+| I reserve never public           | strict Zod contracts + model property every step + Worker privacy regression tests     |
+| J deterministic winner           | engine vs model outcome every step + replay-determinism property                       |
+| K no bids → no winner            | unit + model property                                                                  |
+| L no duplicate terminal events   | unit (repeated ticks) + model property (tick after end emits nothing)                  |
+| Authorization                    | Worker `test/authz.test.ts` (not a domain concern)                                     |
+| D1 projection convergence        | Worker `test/auction-do.test.ts` (outbox) + Day-3 durability regression                |
+
+### Testing approach
+
+- **Model-based property test** (`packages/domain/test/model.property.test.ts`): fast-check generates scenarios
+  (start prices at band boundaries, optional reserve, soft close on/off) and up to 60 commands (bids of 7 amount
+  kinds incl. malformed, retries with same/different payload, time jumps, jumps near close and past the hard cap,
+  ticks, cancels). An independent reference model, written from the spec with no shared code, is stepped
+  alongside the engine; observable state is compared after every step and invariants A–L are asserted. Coverage
+  counters fail the test if any scenario class (every rejection code, extensions, replays, conflicts, all three
+  outcomes, cancel ok/rejected) is never generated. Default seed 20261012 × 400 runs in CI; also run locally
+  with seeds 1, 42, 987654, 31337 × 3000 runs. Reproduce with `FC_SEED`, `FC_PATH`, `FC_RUNS`.
+- Coverage (`pnpm --filter @bike/domain test:coverage`, thresholds 90%): 98.3% statements, 97.9% branches, 100% functions.
+
+### Day-4 integration plan (not yet wired)
+
+Inside `AuctionDO.placeBid`, with **no await between read and commit**:
+
+1. read `state` row → domain `AuctionState`; read idempotency row for (userId, key);
+2. `resolveIdempotency` → replay: return stored result; conflict: 422, no writes;
+3. `placeBid(state, {bidId, userId, amountMinor, now: Date.now()})`;
+4. `transactionSync`: write new state, `bid.accepted` → `bids` row, ALL returned events → `outbox`,
+   idempotency record (accepted or rejected), and timers (`close` = new `closesAt`, `outbox` = now) through the
+   alarm multiplexer;
+5. after commit: map events with `toPublicEvent` (pseudonyms via HMAC adapter, cached per auction in a
+   `pseudonyms` table) and broadcast; `waitUntil(drainOutbox())`.
+   Alarm handler: `tick(state, now)`; commit its events the same way. GC idempotency rows older than 24 h via a timer.

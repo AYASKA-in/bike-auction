@@ -33,3 +33,9 @@ export function timingSafeEqual(a: string, b: string): boolean {
   if (ab.length !== bb.length) return false;
   return crypto.subtle.timingSafeEqual(ab, bb);
 }
+
+/** Web Crypto adapter for @bike/domain's HmacSha256 port (bidder pseudonyms). */
+export async function hmacSha256(secret: string, message: string): Promise<Uint8Array> {
+  const sig = await crypto.subtle.sign("HMAC", await hmacKey(secret), enc.encode(message));
+  return new Uint8Array(sig);
+}

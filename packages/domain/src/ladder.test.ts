@@ -14,7 +14,9 @@ describe("increment ladder", () => {
     [rupees(99_999), rupees(500)],
     [rupees(1_00_000), rupees(1_000)],
     [rupees(2_99_999), rupees(1_000)],
-    [rupees(3_00_000), rupees(2_500)],
+    // Day-3 deliberate correction (ADR 004): the blueprint's ₹1,000 band runs "through ₹3,00,000".
+    [rupees(3_00_000), rupees(1_000)],
+    [rupees(3_00_000.01), rupees(2_500)],
   ])("band boundary: price %i → increment %i", (price, inc) => {
     expect(incrementFor(price)).toBe(inc);
   });

@@ -6,10 +6,36 @@ export type Paise = number;
 
 export const PAISE_PER_RUPEE = 100;
 
-export function isValidAmount(amountMinor: unknown): amountMinor is Paise {
-  return typeof amountMinor === "number" && Number.isSafeInteger(amountMinor) && amountMinor > 0;
+/** Hard platform ceiling for any single amount: ₹1 crore. Far above any two-wheeler, far below 2^53. */
+export const MAX_AMOUNT_MINOR: Paise = 1_000_000_000;
+
+/** A valid amount is a positive safe integer number of paise within the platform ceiling. */
+export function isValidAmount(
+  amountMinor: unknown,
+  max: Paise = MAX_AMOUNT_MINOR,
+): amountMinor is Paise {
+  return (
+    typeof amountMinor === "number" &&
+    Number.isSafeInteger(amountMinor) &&
+    amountMinor > 0 &&
+    amountMinor <= max
+  );
 }
 
+/** Multiplication that refuses to leave the safe-integer range (never silently loses precision). */
+export function safeMultiply(a: number, b: number): number {
+  const r = a * b;
+  if (!Number.isSafeInteger(r)) throw new RangeError(`Unsafe integer arithmetic: ${a} * ${b}`);
+  return r;
+}
+
+export function safeAdd(a: number, b: number): number {
+  const r = a + b;
+  if (!Number.isSafeInteger(r)) throw new RangeError(`Unsafe integer arithmetic: ${a} + ${b}`);
+  return r;
+}
+
+/** Test/seed helper: whole or fractional rupees → paise. Never used on user input. */
 export function rupees(r: number): Paise {
   const p = Math.round(r * PAISE_PER_RUPEE);
   if (!Number.isSafeInteger(p)) throw new RangeError(`Amount out of range: ${r}`);
