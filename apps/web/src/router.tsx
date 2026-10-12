@@ -9,6 +9,10 @@ import { z } from "zod";
 import { AppShell } from "./components/app-shell";
 import { meQuery } from "./lib/session";
 import { AdminPage } from "./routes/admin";
+import { AdminBikeEditPage, AdminBikeNewPage } from "./routes/admin-bike-edit";
+import { AdminBikesPage } from "./routes/admin-bikes";
+import { AuctionDetailPage } from "./routes/auction-detail";
+import { AuctionsPage, CatalogueSearch } from "./routes/auctions";
 import { HomePage } from "./routes/home";
 import { LoginPage } from "./routes/login";
 import { NotFoundPage } from "./routes/not-found";
@@ -53,6 +57,18 @@ const registerRoute = createRoute({
   component: RegisterPage,
 });
 
+const auctionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/auctions",
+  validateSearch: CatalogueSearch,
+  component: AuctionsPage,
+});
+const auctionDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/auctions/$auctionId",
+  component: AuctionDetailPage,
+});
+
 // UX guard only; the API enforces roles independently (test/authz.test.ts).
 const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -62,12 +78,38 @@ const adminRoute = createRoute({
     if (!me) throw redirect({ to: "/login", search: { redirect: location.href } });
     if (me.role !== "ADMIN") throw redirect({ to: "/" });
   },
+});
+const adminIndexRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "/",
   component: AdminPage,
+});
+const adminBikesRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "/bikes",
+  component: AdminBikesPage,
+});
+const adminBikeNewRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "/bikes/new",
+  component: AdminBikeNewPage,
+});
+const adminBikeRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "/bikes/$bikeId",
+  component: AdminBikeEditPage,
 });
 
 export function createAppRouter(queryClient: QueryClient) {
   return createRouter({
-    routeTree: rootRoute.addChildren([homeRoute, loginRoute, registerRoute, adminRoute]),
+    routeTree: rootRoute.addChildren([
+      homeRoute,
+      loginRoute,
+      registerRoute,
+      auctionsRoute,
+      auctionDetailRoute,
+      adminRoute.addChildren([adminIndexRoute, adminBikesRoute, adminBikeNewRoute, adminBikeRoute]),
+    ]),
     context: { queryClient },
     defaultPreload: "intent",
     scrollRestoration: true,

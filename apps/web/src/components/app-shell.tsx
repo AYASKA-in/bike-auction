@@ -1,9 +1,18 @@
 import { Link, Outlet, useNavigate } from "@tanstack/react-router";
+import { ServerClockProvider } from "@/lib/server-time";
 import { useMe, useSignOut } from "@/lib/session";
 import { Button } from "./ui/button";
 import { SystemFooter } from "./system-footer";
 
 export function AppShell() {
+  return (
+    <ServerClockProvider>
+      <Shell />
+    </ServerClockProvider>
+  );
+}
+
+function Shell() {
   return (
     <div className="flex min-h-dvh flex-col">
       <a
@@ -29,7 +38,11 @@ export function AppShell() {
           </Link>
           <ul className="ml-auto mr-2 flex items-center gap-1 text-sm font-medium">
             <li>
-              <Link to="/" hash="auctions" className="rounded-md px-3 py-2 hover:bg-concrete">
+              <Link
+                to="/auctions"
+                className="rounded-md px-3 py-2 hover:bg-concrete"
+                activeProps={{ className: "font-bold" }}
+              >
                 Auctions
               </Link>
             </li>

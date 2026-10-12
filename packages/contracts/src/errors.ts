@@ -24,6 +24,9 @@ export const ErrorCode = z.enum([
   "IDEMPOTENCY_KEY_REUSED",
   "RATE_LIMITED",
   "CONFLICT",
+  "PAYLOAD_TOO_LARGE",
+  "UNSUPPORTED_MEDIA_TYPE",
+  "SERVICE_UNAVAILABLE",
   "INTERNAL",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;

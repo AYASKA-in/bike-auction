@@ -4,6 +4,7 @@ import { recordSecurityEvent } from "../auth/security-events";
 import { timingSafeEqual } from "../lib/crypto";
 import { AppError } from "../lib/problem";
 import { DEMO_ACCOUNTS } from "../seed/demo-accounts";
+import { seedCatalogue } from "../seed/demo-catalogue";
 import type { AppEnv } from "../types";
 
 /**
@@ -39,6 +40,17 @@ internalRoutes.post("/seed", async (c) => {
       .run();
     results.push({ email: acct.email, created: !existing, role: acct.role });
   }
+  const ids = await c.env.DB.prepare(`SELECT email, id FROM "user" WHERE email IN (?, ?)`)
+    .bind(DEMO_ACCOUNTS[1]!.email, DEMO_ACCOUNTS[2]!.email)
+    .all<{ email: string; id: string }>();
+  const byEmail = new Map(ids.results.map((r) => [r.email, r.id]));
+  const catalogue =
+    c.req.query("catalogue") === "false"
+      ? { bikes: 0, auctions: [] }
+      : await seedCatalogue(c.env, {
+          a: byEmail.get(DEMO_ACCOUNTS[1]!.email)!,
+          b: byEmail.get(DEMO_ACCOUNTS[2]!.email)!,
+        });
   await recordSecurityEvent(c.env, { type: "admin.seed", requestId: c.get("requestId") });
-  return c.json({ accounts: results });
+  return c.json({ accounts: results, catalogue });
 });

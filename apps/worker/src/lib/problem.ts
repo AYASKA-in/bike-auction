@@ -20,6 +20,9 @@ const TITLES: Record<ErrorCode, [status: number, title: string]> = {
   IDEMPOTENCY_KEY_REUSED: [422, "Idempotency key reused with a different request"],
   RATE_LIMITED: [429, "Too many requests"],
   CONFLICT: [409, "Conflict"],
+  PAYLOAD_TOO_LARGE: [413, "Payload too large"],
+  UNSUPPORTED_MEDIA_TYPE: [415, "Unsupported media type"],
+  SERVICE_UNAVAILABLE: [503, "Service unavailable"],
   INTERNAL: [500, "Internal error"],
 };
 

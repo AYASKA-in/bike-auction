@@ -3,6 +3,8 @@ import { z } from "zod";
 import { AppError } from "../lib/problem";
 import { requireAdmin } from "../middleware/session";
 import { adminAuctionRoutes } from "./admin-auctions";
+import { adminBikeRoutes } from "./admin-bikes";
+import { EFFECTIVE } from "./catalogue";
 import type { AppEnv } from "../types";
 
 /**
@@ -14,13 +16,23 @@ adminRoutes.use("*", requireAdmin);
 
 adminRoutes.get("/overview", async (c) => {
   const since = Date.now() - 24 * 60 * 60 * 1000;
-  const [users, events] = await c.env.DB.batch([
+  const [users, events, bikes, auctions] = await c.env.DB.batch([
     c.env.DB.prepare(`SELECT role, COUNT(*) AS n FROM "user" GROUP BY role`),
     c.env.DB.prepare(
       `SELECT type, COUNT(*) AS n FROM security_events WHERE created_at >= ? GROUP BY type`,
     ).bind(since),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM bikes`),
+    // Same schedule-derived status the catalogue uses, so the KPIs match the desk rows.
+    c.env.DB.prepare(
+      `SELECT ${EFFECTIVE} AS status, COUNT(*) AS n FROM auctions_rm r GROUP BY 1`,
+    ).bind(Date.now()),
   ]);
-  return c.json({ usersByRole: users?.results ?? [], securityEvents24h: events?.results ?? [] });
+  return c.json({
+    usersByRole: users?.results ?? [],
+    securityEvents24h: events?.results ?? [],
+    bikes: Number((bikes?.results?.[0] as { n?: number } | undefined)?.n ?? 0),
+    auctionsByStatus: auctions?.results ?? [],
+  });
 });
 
 const EventsQuery = z.object({
@@ -43,3 +55,4 @@ adminRoutes.get("/security-events", async (c) => {
 });
 
 adminRoutes.route("/", adminAuctionRoutes);
+adminRoutes.route("/", adminBikeRoutes);

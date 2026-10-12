@@ -38,8 +38,9 @@
       "migrations_dir": "migrations",
     },
   ],
-  // R2 (bike images) is added on Day 5. Enabling R2 can require a payment method on file, so it is
-  // deliberately not a Day-2 deploy dependency.
+  // Bike images. If R2 is not enabled on the account, scripts/deploy.mjs deploys without this binding
+  // and image upload answers 503 (listings show placeholders). See README → Deployment.
+  "r2_buckets": [{ "binding": "IMAGES", "bucket_name": "bike-auction-images" }],
 
   // Coarse, per-location, eventually consistent edge limits (BLUEPRINT §7.5).
   "ratelimits": [

@@ -86,7 +86,7 @@ export interface PublicBid {
 const OUTBOX_BATCH = 100;
 const OUTBOX_MAX_BACKOFF_MS = 60_000;
 const MAX_CLIENT_MESSAGES = 30;
-/** Exact per-user, per-auction command throttle (best-effort: in memory, resets on eviction). */
+/** Exact per-user, per-auction command throttle, persisted in SQLite (survives restarts). */
 const BID_THROTTLE = { limit: 10, windowMs: 10_000 };
 
 type Attachment = { userId: string | null; connectedAt: number; messages: number };
@@ -97,7 +97,6 @@ export class AuctionDO extends DurableObject<Env> {
   private cached: AuctionState | null | undefined; // undefined = not loaded
   private draining: Promise<void> | null = null;
   private drainAgain = false;
-  private readonly attempts = new Map<string, number[]>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -241,14 +240,19 @@ export class AuctionDO extends DurableObject<Env> {
     return { kind: "evaluated", replayed: false, result: record.result };
   }
 
+  /** Sliding window over SQLite rows (synchronous: safe inside the critical section). */
   private throttle(userId: string, now: number): number {
-    const recent = (this.attempts.get(userId) ?? []).filter((t) => now - t < BID_THROTTLE.windowMs);
-    if (recent.length >= BID_THROTTLE.limit) {
-      this.attempts.set(userId, recent);
-      return BID_THROTTLE.windowMs - (now - recent[0]!);
-    }
-    recent.push(now);
-    this.attempts.set(userId, recent);
+    const since = now - BID_THROTTLE.windowMs;
+    this.sql.exec(`DELETE FROM bid_attempts WHERE at <= ?`, since);
+    const r = this.sql
+      .exec<{ n: number; first: number | null }>(
+        `SELECT COUNT(*) AS n, MIN(at) AS first FROM bid_attempts WHERE user_id = ? AND at > ?`,
+        userId,
+        since,
+      )
+      .one();
+    if (r.n >= BID_THROTTLE.limit) return BID_THROTTLE.windowMs - (now - (r.first ?? now));
+    this.sql.exec(`INSERT INTO bid_attempts (user_id, at) VALUES (?, ?)`, userId, now);
     return 0;
   }
 
@@ -658,6 +662,14 @@ export class AuctionDO extends DurableObject<Env> {
           now,
         ),
     );
+    if (state.status === "ENDED" || state.status === "CANCELLED") {
+      // Release the bike for a new auction (clears the open-auction unique index).
+      stmts.push(
+        db
+          .prepare(`UPDATE auction_listings SET active = 0 WHERE auction_id = ?`)
+          .bind(state.auctionId),
+      );
+    }
     try {
       await db.batch(stmts);
       this.ctx.storage.transactionSync(() => {

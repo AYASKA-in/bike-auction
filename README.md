@@ -4,9 +4,11 @@ Real-time auctions for used and repossessed two-wheelers. Each auction is run by
 Cloudflare Durable Object, so concurrent bids get a single, provable order. Built on free Cloudflare
 infrastructure. Design: [`BLUEPRINT.md`](BLUEPRINT.md) · Status: [`docs/progress.md`](docs/progress.md).
 
-> **Status: Day 4 of 10.** Accounts, roles, the auction rules engine and the real-time bidding backend
-> (atomic bids, idempotency, alarms, D1 sync, WebSockets) are in place. API: [`docs/api.md`](docs/api.md).
-> Catalogue and bidding UI follow.
+> **Status: Day 5 of 10.** Accounts, roles, the auction rules engine, the real-time bidding backend, and the
+> motorcycle catalogue (bikes, inspections, private R2 photos, admin listing desk, public catalogue with
+> search/filters/sorts, auction detail page with live state) are in place and verified locally.
+> API: [`docs/api.md`](docs/api.md). Screenshots: [`docs/screenshots/day5`](docs/screenshots/day5).
+> Not yet verified on real Cloudflare (deploy pending your approval).
 
 ## Demo accounts
 
@@ -42,7 +44,7 @@ Node 22+, pnpm 10 (`corepack enable`). No Cloudflare account is needed for local
 ```bash
 pnpm install
 pnpm dev            # builds the SPA, applies local D1 migrations, runs the Worker on http://localhost:8787
-pnpm --filter @bike/worker seed:local   # in a second terminal: create the demo accounts locally
+pnpm --filter @bike/worker seed:local   # in a second terminal: demo accounts + 8 demo bikes/auctions
 # for frontend hot-reload, in a second terminal:
 pnpm dev:web        # http://localhost:5173, proxies /api (incl. WebSockets) to :8787
 ```
@@ -58,6 +60,24 @@ pnpm --filter @bike/domain test:coverage   # domain coverage report (90% thresho
 FC_SEED=42 FC_RUNS=3000 pnpm --filter @bike/domain test   # longer property-test run
 pnpm --filter @bike/worker spike:auth   # optional: password-hashing latency spike against wrangler dev
 ```
+
+### End-to-end journey (real local app, Playwright)
+
+```bash
+pip install playwright pillow    # browser: a local Chromium
+python3 tests/e2e/journey.py http://127.0.0.1:8787 /tmp/e2e   # needs a seeded local `wrangler dev`
+```
+
+Admin signs in → creates a bike → records an inspection → uploads a photo with GPS EXIF (checks the stored
+copy has none and is ≤2000 px) → creates a draft auction → schedules it → buyer finds it via search → opens the
+detail page (reserve not leaked) → bids → mobile filters. Screenshots go to the output folder.
+
+### Demo catalogue
+
+Seeding adds 8 fictional, clearly labelled Indian listings (Classic 350, Activa 6G, Pulsar NS200 repossessed
+with an active loan, Jupiter, Splendor Plus, Apache RTR 160 4V, Access 125, FZ-S): 3 live with real bids,
+2 upcoming, 2 ending right after seeding (one sold, one reserve not met), 1 draft. Idempotent per listing.
+No photos are bundled (no authorised images); cards show an original placeholder until an admin uploads one.
 
 ## Environment
 
@@ -87,3 +107,7 @@ pnpm deploy --turnstile-site-key <site key> --turnstile-secret-key <secret key>
 ```
 
 Rollback: `npx wrangler rollback` (in `apps/worker`).
+
+**Photos / R2:** by default the deploy runs **without** the R2 binding (no R2 activation, no billing): photo
+uploads return 503 and listings show placeholders. After you approve R2 storage, run `pnpm deploy --with-r2`
+(creates the private `bike-auction-images` bucket and binds it). Locally, Wrangler's R2 emulation is used.

@@ -5,6 +5,7 @@ import { originGuard, securityHeaders } from "./middleware/security";
 import { loadSession } from "./middleware/session";
 import { adminRoutes } from "./routes/admin";
 import { auctionRoutes } from "./routes/auctions";
+import { catalogueRoutes } from "./routes/catalogue";
 import { authRoutes } from "./routes/auth";
 import { internalRoutes } from "./routes/internal";
 import { configRoutes, meRoutes } from "./routes/me";
@@ -32,6 +33,7 @@ export function createApp() {
   v1.use("/admin/*", loadSession);
   v1.route("/", meRoutes);
   v1.route("/admin", adminRoutes);
+  v1.route("/", catalogueRoutes); // GET /auctions (list), /auctions/:id/details, /images/*, /catalogue/facets
   v1.route("/auctions", auctionRoutes);
 
   v1.use("/_spike/*", async (c, next) => {

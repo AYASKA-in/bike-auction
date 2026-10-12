@@ -82,6 +82,11 @@ const MIGRATIONS: readonly string[] = [
   );
   INSERT INTO sync_status (id) VALUES (1);
   `,
+  // v3 (Day 5): the per-user bid throttle survives restarts (was in-memory on Day 4).
+  `
+  CREATE TABLE bid_attempts (user_id TEXT NOT NULL, at INTEGER NOT NULL);
+  CREATE INDEX idx_bid_attempts ON bid_attempts (user_id, at);
+  `,
 ];
 
 export const AUCTION_SCHEMA_VERSION = MIGRATIONS.length;

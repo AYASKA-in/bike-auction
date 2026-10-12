@@ -149,6 +149,35 @@ user, reconnection snapshot, resync, hibernation; authn/authz on bids and admin 
 
 **Still unverified:** real Cloudflare behaviour (you run `pnpm deploy`).
 
-## Next: Day 5
+## Day 5 (13 Oct 2026): catalogue and listing system, complete locally
 
-Motorcycle catalogue (D1 + R2 images), auction list endpoint from `auctions_rm`, admin listing UI.
+**Built:** D1 migration 0004 (bikes, versioned inspections, images, auction listings with a partial unique
+index); admin bike/inspection/photo APIs with full validation and audit; private R2 image pipeline (browser
+resize + EXIF strip, server magic-byte/size/dimension checks, no orphans on R2 or D1 failure); auction creation
+from a bike (inspection required, draft first, duplicate-safe, DO-failure cleanup); Auction Desk with KPIs and
+working schedule/cancel/edit/view; public catalogue `/`, `/auctions` (search, 7 filters, 5 sorts, keyset paging,
+mobile filter sheet); detail page `/auctions/:id` (gallery, specs, documents, inspection, terms, live panel,
+working bid form); admin pages `/admin/bikes`, `/admin/bikes/new`, `/admin/bikes/:id` with buyer-card preview;
+8 fictional demo listings across live/upcoming/ended/draft; persistent bid throttle (DO schema v3).
+
+**Tests:** 305 passing (234 → 305; +71): catalogue/admin/image/workflow/catalogue-query/overview tests,
+persistent-throttle regression tests, web format tests. Plus `tests/e2e/journey.py` (Playwright, real local app,
+desktop + mobile): **passed**.
+
+**Bugs found and fixed:**
+
+- Live panel didn't show "You have the highest bid." after bidding: the reducer ignored an HTTP view with the
+  same seq, which carries the viewer's personal fields. Now equal seq applies; only older is ignored.
+- Desk KPIs showed "—": `/admin/overview` lacked `bikes`/`auctionsByStatus`. Added; the desk list and KPIs now
+  use the same schedule-derived status.
+- Seed crashed with 500 when an older `.dev.vars` lacked `PSEUDONYM_SECRET`; `ensure-dev-vars` now appends
+  missing keys and the DO fails with a clear message.
+- A crashed seed left a partial catalogue that later runs skipped; seeding is now idempotent per listing.
+- A card-price test passed without proving anything (no Idempotency-Key, so the bid was rejected); rewritten.
+- Day-4 admin test updated: auctions now require `bikeId` (deliberate contract change).
+
+**Still unverified:** real Cloudflare and R2 (deploy and R2 activation need your approval).
+
+## Next: Day 6
+
+Per the blueprint. Ready: catalogue + listing APIs, detail page with live state, demo data, e2e harness.

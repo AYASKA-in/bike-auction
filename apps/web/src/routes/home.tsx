@@ -1,5 +1,9 @@
 import { formatINR, minNextBid, rupees } from "@bike/domain";
+import { useInfiniteQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { AuctionCard, CardSkeleton } from "@/components/auction-card";
 import { AuctionClock } from "@/components/auction-clock";
+import { catalogueQuery, type CatalogueFilters } from "@/lib/catalogue";
 
 const example = { start: rupees(75_000), current: rupees(81_500) };
 
@@ -41,22 +45,23 @@ export function HomePage() {
         </div>
       </section>
 
-      <section
-        id="auctions"
-        aria-labelledby="auctions-heading"
-        className="mx-auto max-w-6xl px-4 py-14 sm:px-6"
-      >
-        <h2 id="auctions-heading" className="font-expanded text-2xl font-bold tracking-tight">
-          Auctions
-        </h2>
-        <div className="mt-6 rounded-xl border border-dashed border-steel/40 bg-paper px-6 py-12 text-center">
-          <p className="text-lg font-semibold">No auctions are open right now</p>
-          <p className="mx-auto mt-2 max-w-[48ch] text-steel">
-            Live and upcoming lots will appear here and update on their own, without reloading the
-            page.
-          </p>
-        </div>
-      </section>
+      <div id="auctions" className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+        <Shelf
+          title="Live now"
+          filters={{ status: "LIVE" }}
+          empty="No auctions are live right now. Check the upcoming ones below."
+        />
+        <Shelf
+          title="Starting soon"
+          filters={{ status: "UPCOMING" }}
+          empty="Nothing scheduled yet. New lots are added daily."
+        />
+        <p className="mt-10">
+          <Link to="/auctions" className="font-semibold underline underline-offset-4">
+            Browse all auctions with filters
+          </Link>
+        </p>
+      </div>
 
       <section
         id="how-it-works"
@@ -84,5 +89,53 @@ export function HomePage() {
         </div>
       </section>
     </>
+  );
+}
+
+function Shelf({
+  title,
+  filters,
+  empty,
+}: {
+  title: string;
+  filters: CatalogueFilters;
+  empty: string;
+}) {
+  const q = useInfiniteQuery(catalogueQuery(filters, 3));
+  const items = q.data?.pages[0]?.items ?? [];
+  return (
+    <section aria-label={title} className="mt-10 first:mt-0">
+      <div className="flex items-baseline justify-between gap-4">
+        <h2 className="font-expanded text-2xl font-bold tracking-tight">{title}</h2>
+        <Link
+          to="/auctions"
+          search={{ status: filters.status }}
+          className="text-sm font-semibold underline underline-offset-4"
+        >
+          See all
+        </Link>
+      </div>
+      <div className="mt-5">
+        {q.isPending ? (
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <CardSkeleton key={i} />
+            ))}
+          </div>
+        ) : items.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-steel/40 bg-paper px-6 py-8 text-center text-steel">
+            {q.isError ? "Couldn't load auctions." : empty}
+          </p>
+        ) : (
+          <ul className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {items.map((a) => (
+              <li key={a.auctionId}>
+                <AuctionCard a={a} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }

@@ -59,3 +59,29 @@ export function apiPost<T>(
     parse,
   );
 }
+
+export function apiSend<T>(
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  body: unknown,
+  parse: (x: unknown) => T,
+): Promise<T> {
+  return request(
+    path,
+    {
+      method,
+      headers: body === undefined ? {} : { "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    },
+    parse,
+  );
+}
+
+/** Raw binary upload (images). */
+export function apiUpload<T>(path: string, blob: Blob, parse: (x: unknown) => T): Promise<T> {
+  return request(
+    path,
+    { method: "POST", headers: { "content-type": blob.type }, body: blob },
+    parse,
+  );
+}

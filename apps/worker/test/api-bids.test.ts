@@ -2,6 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { ProblemDetails, PublicAuctionView } from "@bike/contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { BASE, cookieFrom, mockTurnstile, signIn, signUp } from "./auth-helpers";
+import { inspectedBike } from "./catalogue-helpers";
 import { createAuction } from "./helpers";
 import { connect, until } from "./ws-helpers";
 
@@ -163,9 +164,12 @@ describe("admin auction API", () => {
   it("creates, edits, schedules and cancels with audit log entries; buyers cannot", async () => {
     const startsAt = new Date(Date.now() + 60 * 60_000).toISOString();
     const closesAt = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
+    // Day 5: auctions are created for an inspected motorcycle (deliberate contract change).
+    const bikeId = await inspectedBike(admin);
     const created = await api("POST", "/admin/auctions", {
       cookie: admin,
       body: {
+        bikeId,
         startPriceMinor: 4_500_000,
         reserveMinor: 6_000_000,
         startsAt,
@@ -235,13 +239,18 @@ describe("admin auction API", () => {
   it("validates admin input", async () => {
     const res = await api("POST", "/admin/auctions", {
       cookie: admin,
-      body: { startPriceMinor: 0, startsAt: "nope", closesAt: "nope" },
+      body: { bikeId: "bike_x", startPriceMinor: 0, startsAt: "nope", closesAt: "nope" },
     });
     expect(res.status).toBe(422);
     const iso = (ms: number) => new Date(Date.now() + ms).toISOString();
     const tooShort = await api("POST", "/admin/auctions", {
       cookie: admin,
-      body: { startPriceMinor: 100, startsAt: iso(0), closesAt: iso(1000) },
+      body: {
+        bikeId: await inspectedBike(admin),
+        startPriceMinor: 100,
+        startsAt: iso(0),
+        closesAt: iso(1000),
+      },
     });
     expect((await problem(tooShort)).code).toBe("VALIDATION_FAILED");
   });

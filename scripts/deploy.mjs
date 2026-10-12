@@ -4,6 +4,10 @@
 //   node scripts/deploy.mjs                       # first deploy (Turnstile TEST keys, for the auth gate)
 //   node scripts/deploy.mjs --turnstile-site-key 0x... --turnstile-secret-key 0x...   # real bot protection
 //   node scripts/deploy.mjs --skip-gate           # don't run the 20x auth check afterwards
+//   node scripts/deploy.mjs --with-r2             # ALSO create/bind the R2 image bucket. Only after you have
+//                                                 # approved enabling R2 on the account (it may ask for billing).
+// Without --with-r2 the Worker is deployed WITHOUT the image binding: uploads answer 503 and listings
+// show placeholders. Nothing here enables R2 or adds a payment method.
 //
 // What it does: wrangler login (if needed) → D1 database (create if missing, write its id into
 // wrangler.jsonc) → build → apply D1 migrations → deploy → set secrets → seed demo accounts →
@@ -45,6 +49,18 @@ function wrangler(cmdArgs, { capture = false, input, env = {} } = {}) {
   return r.stdout ?? "";
 }
 
+// 0. Config: by default strip the R2 binding into a generated deploy config (never commit it).
+const withR2 = has("with-r2");
+const deployConfig = join(worker, "wrangler.deploy.jsonc");
+const writeDeployConfig = () =>
+  writeFileSync(
+    deployConfig,
+    withR2
+      ? readFileSync(wranglerConfig, "utf8")
+      : readFileSync(wranglerConfig, "utf8").replace(/^\s*"r2_buckets":.*$/m, ""),
+  );
+const CFG = ["--config", "wrangler.deploy.jsonc"];
+
 // 1. Auth
 step("Checking Cloudflare login");
 const who = spawnSync("npx", ["wrangler", "whoami"], {
@@ -77,6 +93,8 @@ if (patched !== cfg) {
   console.log(`  wrote database_id ${db.uuid} to apps/worker/wrangler.jsonc (commit this change)`);
 }
 
+writeDeployConfig(); // after the database id is known
+
 // 3. Secrets (generated once, reused on re-runs)
 const secrets = existsSync(secretsFile) ? JSON.parse(readFileSync(secretsFile, "utf8")) : {};
 secrets.BETTER_AUTH_SECRET ??= randomBytes(32).toString("base64url");
@@ -94,7 +112,7 @@ step("Building web app and Worker");
 execSync("pnpm build", { cwd: root, stdio: "inherit" });
 
 step("Applying D1 migrations (remote)");
-wrangler(["d1", "migrations", "apply", "DB", "--remote"], { env: { CI: "true" } });
+wrangler(["d1", "migrations", "apply", "DB", "--remote", ...CFG], { env: { CI: "true" } });
 
 let version = "unversioned";
 try {
@@ -124,7 +142,7 @@ writeFileSync(
   }),
 );
 try {
-  wrangler(["secret", "bulk", tmp]);
+  wrangler(["secret", "bulk", tmp, ...CFG]);
 } finally {
   unlinkSync(tmp);
 }

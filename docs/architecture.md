@@ -121,6 +121,32 @@ successful commit; WebSockets hibernate and survive eviction.
 batch's last seq. Failure: attempts++, `sync_status` updated, exponential backoff timer (1 s … 60 s). Ops view:
 `GET /admin/auctions/:id` → `ops` (seq, projectedSeq, pendingOutbox, oldestPendingAgeMs, sync, timers).
 
+## Catalogue and listings (Day 5)
+
+- **Read path:** catalogue cards and filters come from one D1 query joining `auction_listings`, `bikes`,
+  `auctions_rm`, the latest inspection grade and the cover image. No Durable Object is contacted to render a
+  list. Status shown is derived from the schedule (a SCHEDULED row past its start reads as LIVE) so cards stay
+  honest even if a projection is briefly late.
+- **Detail page:** static bike data from `/auctions/:id/details` (D1); price, bids, reserve-met and status from
+  the DO (`GET /auctions/:id`, then the WebSocket). The client reducer applies an HTTP view only if its seq is
+  ≥ the socket's, so a delayed read can never override newer authoritative state.
+- **Listing → auction workflow:** bike → inspection (required) → photos → `POST /admin/auctions` inserts the
+  listing row first (the partial unique index rejects a second open auction, race-safe), then creates the DO.
+  If the DO call fails the listing row is deleted; a listing stranded by a crash between the two (no read model
+  after 2 min) is released automatically on the next create. Drafts are reviewed, then scheduled.
+- **Images:** the browser resizes to ≤2000 px and re-encodes to WebP/JPEG (drops EXIF/GPS); the Worker
+  re-validates size, magic bytes vs declared type, and dimensions; R2 put happens before the D1 insert and is
+  deleted if the insert fails, so no orphans. The bucket is private; images are streamed through the Worker.
+- **Audit:** every admin mutation (bike, inspection, image, auction create/edit/schedule/cancel) is written to
+  `audit_log` with admin id, time, record and a minimal, secret-free metadata object.
+
+## Known limitations (Day 5)
+
+- Nothing verified on real Cloudflare or R2 yet. Production deploys run without R2 until you approve it.
+- Price sorts use keyset paging on a value that changes while bids arrive; a card can move between pages.
+- The SPA bundle is >500 KB (one chunk); route-level code splitting is planned with the Day-7 bidding UI.
+- No bundled demo photos (no authorised images available); placeholders are shown.
+
 ## Known limitations (Day 4)
 
 - Nothing verified on real Cloudflare yet (deploy pending): CPU limits, alarm timing, WS limits, D1 latency.
