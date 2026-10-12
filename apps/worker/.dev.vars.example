@@ -1,0 +1,4 @@
+# Copy to .dev.vars for local secrets (never commit .dev.vars).
+# Day 2 (auth) will add:
+# BETTER_AUTH_SECRET=generate-with-openssl-rand-base64-32
+# TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA   # Cloudflare's always-pass test key

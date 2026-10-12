@@ -1,0 +1,56 @@
+@import "tailwindcss";
+@import "@fontsource-variable/archivo/wdth.css";
+
+/*
+  "Trading desk meets garage": cool concrete surfaces, asphalt ink, one hi-vis orange.
+  Winning/outbid states always pair colour with text and an icon.
+*/
+@theme {
+  --font-sans: "Archivo Variable", ui-sans-serif, system-ui, sans-serif;
+
+  --color-concrete: #eceeeb;
+  --color-paper: #f8f9f7;
+  --color-asphalt: #1d2125;
+  --color-asphalt-2: #2a3036;
+  --color-steel: #5a646d;
+  --color-rule: #d3d7d3;
+  --color-hivis: #f25c05;
+  --color-hivis-ink: #b84300;
+  --color-ledger: #1e7a4c;
+  --color-amber: #a86a12;
+  --color-danger: #b42318;
+}
+
+@layer base {
+  html {
+    background: var(--color-concrete);
+    color: var(--color-asphalt);
+    font-family: var(--font-sans);
+    font-variation-settings: "wdth" 100;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  :focus-visible {
+    outline: 3px solid var(--color-hivis);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@utility font-expanded {
+  font-variation-settings: "wdth" 125;
+}
+@utility font-condensed {
+  font-variation-settings: "wdth" 80;
+}
+@utility tnum {
+  font-variant-numeric: tabular-nums lining-nums;
+}

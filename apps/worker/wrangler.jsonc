@@ -1,0 +1,48 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bike-auction",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  // nodejs_compat: Better Auth resolves the "workerd" export condition to node:crypto scrypt.
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+
+  // SPA + API on one origin: /api/* always hits the Worker, everything else is static assets
+  // with SPA fallback to index.html.
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "AUCTION", "class_name": "AuctionDO" },
+      { "name": "PASSWORD_HASHER", "class_name": "PasswordHasherDO" },
+      // Day-1 spike only (interleaving demonstration). Remove with a deleted_classes migration.
+      { "name": "SPIKE_PROBE", "class_name": "SpikeProbeDO" },
+    ],
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["AuctionDO", "PasswordHasherDO", "SpikeProbeDO"] },
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bike-auction",
+      // Placeholder for local development. Replace with the id printed by
+      // `wrangler d1 create bike-auction` before the first deploy (see README → Deployment).
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [{ "binding": "IMAGES", "bucket_name": "bike-auction-images" }],
+
+  "vars": {
+    "ENVIRONMENT": "development",
+    "APP_VERSION": "dev",
+    "ALLOWED_ORIGINS": "http://localhost:8787,http://localhost:5173",
+  },
+}
