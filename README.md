@@ -4,8 +4,17 @@ Real-time auctions for used and repossessed two-wheelers. Each auction is run by
 Cloudflare Durable Object, so concurrent bids get a single, provable order. Built on free Cloudflare
 infrastructure. Design: [`BLUEPRINT.md`](BLUEPRINT.md) · Status: [`docs/progress.md`](docs/progress.md).
 
-> **Status: Day 1 of 10.** Foundation, technical spikes and tests are in place; auth, catalogue and the
-> bidding UI follow. Not yet deployed.
+> **Status: Day 2 of 10.** Foundation, accounts and roles are in place; the catalogue and bidding UI follow.
+
+## Demo accounts
+
+Created by the seed step (demo-only passwords, used nowhere else):
+
+| Role    | Email                    | Password          |
+| ------- | ------------------------ | ----------------- |
+| Admin   | admin@bikeauction.demo   | Demo-Admin-2026!  |
+| Buyer A | buyer.a@bikeauction.demo | Demo-BuyerA-2026! |
+| Buyer B | buyer.b@bikeauction.demo | Demo-BuyerB-2026! |
 
 ## Stack
 
@@ -31,6 +40,7 @@ Node 22+, pnpm 10 (`corepack enable`). No Cloudflare account is needed for local
 ```bash
 pnpm install
 pnpm dev            # builds the SPA, applies local D1 migrations, runs the Worker on http://localhost:8787
+pnpm --filter @bike/worker seed:local   # in a second terminal: create the demo accounts locally
 # for frontend hot-reload, in a second terminal:
 pnpm dev:web        # http://localhost:5173, proxies /api (incl. WebSockets) to :8787
 ```
@@ -51,13 +61,25 @@ Non-secret config lives in `apps/worker/wrangler.jsonc` (`vars`). Secrets go in 
 locally (see `.dev.vars.example`) and `wrangler secret put` in production. Never commit `.dev.vars`.
 After changing bindings, run `pnpm --filter @bike/worker cf-typegen`.
 
-## Deployment (not yet performed; requires approval)
+## Deployment
+
+Run this in your own terminal (Windows PowerShell, macOS or Linux), from the repo root:
 
 ```bash
-cd apps/worker
-npx wrangler login
-npx wrangler d1 create bike-auction        # copy database_id into wrangler.jsonc
-npx wrangler r2 bucket create bike-auction-images
-npx wrangler d1 migrations apply DB --remote
-cd ../.. && pnpm build && pnpm --filter @bike/worker exec wrangler deploy
+corepack enable          # or: npm i -g pnpm
+pnpm install
+pnpm deploy              # opens the browser for `wrangler login` the first time
 ```
+
+`scripts/deploy.mjs` is idempotent. It creates the D1 database (and writes its id into `wrangler.jsonc`),
+builds, applies migrations, deploys, sets generated secrets (kept in `apps/worker/.deploy-secrets.json`,
+git-ignored), seeds the demo accounts, waits for the new version, and runs the 20× auth gate.
+
+The first deploy uses Cloudflare's **Turnstile test keys** so the gate can run. Afterwards, create a free
+Turnstile widget for your `*.workers.dev` hostname (dashboard → Turnstile) and run:
+
+```bash
+pnpm deploy --turnstile-site-key <site key> --turnstile-secret-key <secret key>
+```
+
+Rollback: `npx wrangler rollback` (in `apps/worker`).

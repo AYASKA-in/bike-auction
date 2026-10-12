@@ -10,7 +10,16 @@ export default defineConfig(async () => {
     plugins: [
       cloudflareTest({
         wrangler: { configPath: "./wrangler.jsonc" },
-        miniflare: { bindings: { TEST_MIGRATIONS: migrations } },
+        miniflare: {
+          bindings: {
+            TEST_MIGRATIONS: migrations,
+            ENVIRONMENT: "test",
+            BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret-0123456789",
+            // Cloudflare's documented always-pass Turnstile test secret; siteverify is mocked in tests.
+            TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
+            SEED_TOKEN: "test-seed-token-0123456789abcdef",
+          },
+        },
       }),
     ],
     test: { setupFiles: ["./test/apply-migrations.ts"] },

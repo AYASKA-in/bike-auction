@@ -6,6 +6,10 @@ import { z } from "zod";
  */
 export const ErrorCode = z.enum([
   "AUTH_REQUIRED",
+  "INVALID_CREDENTIALS",
+  "ACCOUNT_EXISTS",
+  "WEAK_PASSWORD",
+  "CAPTCHA_FAILED",
   "FORBIDDEN",
   "VALIDATION_FAILED",
   "NOT_FOUND",

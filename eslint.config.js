@@ -12,6 +12,7 @@ export default tseslint.config(
       "**/worker-configuration.d.ts",
       "**/routeTree.gen.ts",
       "apps/worker/scripts/**",
+      "scripts/**",
     ],
   },
   js.configs.recommended,

@@ -4,13 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "node scripts/ensure-dev-vars.mjs && wrangler dev",
     "build": "wrangler deploy --dry-run --outdir dist",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node scripts/ensure-assets.mjs && vitest run",
-    "cf-typegen": "wrangler types --strict-vars=false",
+    "cf-typegen": "wrangler types --strict-vars=false --env-file .dev.vars.example",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
-    "spike:auth": "node scripts/spike-auth-cpu.mjs"
+    "spike:auth": "node scripts/spike-auth-cpu.mjs",
+    "seed:local": "node scripts/seed.mjs http://localhost:8787 local-seed-token-0123456789abcdef"
   },
   "dependencies": {
     "@bike/contracts": "workspace:*",

@@ -31,7 +31,7 @@ describe("system endpoints", () => {
     expect(res.status).toBe(200);
     const body = StatusResponse.parse(await res.json());
     expect(body.checks.d1.status).toBe("ok");
-    expect(body.environment).toBe("development");
+    expect(body.environment).toBe("test");
   });
 
   it("unknown API routes return RFC 9457 problem+json", async () => {

@@ -2,6 +2,10 @@ import { PROBLEM_CONTENT_TYPE, type ErrorCode, type ProblemDetails } from "@bike
 
 const TITLES: Record<ErrorCode, [status: number, title: string]> = {
   AUTH_REQUIRED: [401, "Authentication required"],
+  INVALID_CREDENTIALS: [401, "Email or password is incorrect"],
+  ACCOUNT_EXISTS: [409, "An account with this email already exists"],
+  WEAK_PASSWORD: [422, "Password does not meet the policy"],
+  CAPTCHA_FAILED: [400, "Bot check failed"],
   FORBIDDEN: [403, "Forbidden"],
   VALIDATION_FAILED: [422, "Validation failed"],
   NOT_FOUND: [404, "Not found"],

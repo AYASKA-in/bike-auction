@@ -86,3 +86,18 @@ D1: 100k rows written/day, 5M read/day. Static asset requests are free and unlim
 - `@cloudflare/vitest-pool-workers` is **deprecated**, renamed to `@cloudflare/vitest-plugin` (used here).
 - TypeScript 7 (Go-native) is "latest", but typescript-eslint supports `<6.1`, so TS is pinned to **6.0.3**.
 - Vitest is pinned to **4.1.11** (the plugin supports 4.1+ and 5; 4.x is the more mature line).
+
+## Day 2 additions (12 Oct 2026)
+
+| Fact                                                                                                | Status                                                                                                   | Evidence                             |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| Better Auth scrypt inside workerd: **80–110 ms per hash** (wall clock across the DO RPC, 5 samples) | **Measured locally**                                                                                     | matches the 91 ms native measurement |
+| Full register → sign-in → /me → sign-out cycle via `PasswordHasherDO`                               | **Passed locally** (`scripts/auth-gate.mjs`, 3 runs: sign-up p50 136 ms, sign-in p50 127 ms, 0 failures) | `wrangler dev`                       |
+| Same gate, 20 runs on the deployed Free plan                                                        | **PENDING** (you run `pnpm deploy`; my environments cannot reach api.cloudflare.com)                     |                                      |
+| Better Auth migrations match what the library expects                                               | **Verified** by a drift test (`test/auth-schema.test.ts`)                                                |                                      |
+
+**Bug found: Better Auth instance initialised across requests.** A request that created an auth instance
+but returned early (validation failure) left `auth.$context` initialising in a finished request; the next
+request awaited that cross-request promise and hung forever (Workers forbids resuming another request's
+I/O). Fix: `getAuth()` always awaits `auth.$context` inside the current request. Reproduced and pinned
+by `test/auth.test.ts` (short/common password → duplicate sign-up sequence).

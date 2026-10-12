@@ -29,7 +29,7 @@ jobs:
       - name: Lint
         run: pnpm lint
       - name: Worker types are up to date
-        run: pnpm --filter @bike/worker exec wrangler types --strict-vars=false --check
+        run: pnpm --filter @bike/worker exec wrangler types --strict-vars=false --env-file .dev.vars.example --check
       - name: Typecheck
         run: pnpm typecheck
       - name: Build (web + worker bundle dry-run)

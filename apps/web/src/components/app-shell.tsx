@@ -1,4 +1,6 @@
-import { Link, Outlet } from "@tanstack/react-router";
+import { Link, Outlet, useNavigate } from "@tanstack/react-router";
+import { useMe, useSignOut } from "@/lib/session";
+import { Button } from "./ui/button";
 import { SystemFooter } from "./system-footer";
 
 export function AppShell() {
@@ -25,7 +27,7 @@ export function AppShell() {
               Bike Auction
             </span>
           </Link>
-          <ul className="flex items-center gap-1 text-sm font-medium">
+          <ul className="ml-auto mr-2 flex items-center gap-1 text-sm font-medium">
             <li>
               <Link to="/" hash="auctions" className="rounded-md px-3 py-2 hover:bg-concrete">
                 Auctions
@@ -37,12 +39,52 @@ export function AppShell() {
               </Link>
             </li>
           </ul>
+          <AccountMenu />
         </nav>
       </header>
       <main id="main" className="flex-1">
         <Outlet />
       </main>
       <SystemFooter />
+    </div>
+  );
+}
+
+function AccountMenu() {
+  const me = useMe();
+  const signOut = useSignOut();
+  const navigate = useNavigate();
+  if (me.isPending) return <span className="h-11 w-24" aria-hidden="true" />;
+  if (!me.data) {
+    return (
+      <Button asChild size="md" variant="secondary">
+        <Link to="/login">Sign in</Link>
+      </Button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      {me.data.role === "ADMIN" && (
+        <Link
+          to="/admin"
+          className="hidden rounded-md px-3 py-2 text-sm font-medium hover:bg-concrete sm:block"
+        >
+          Auction desk
+        </Link>
+      )}
+      <span
+        className="hidden max-w-[12ch] truncate text-sm font-semibold md:block"
+        title={me.data.email}
+      >
+        {me.data.name}
+      </span>
+      <Button
+        variant="ghost"
+        onClick={() => signOut.mutate(undefined, { onSettled: () => void navigate({ to: "/" }) })}
+        disabled={signOut.isPending}
+      >
+        Sign out
+      </Button>
     </div>
   );
 }

@@ -38,11 +38,23 @@
       "migrations_dir": "migrations",
     },
   ],
-  "r2_buckets": [{ "binding": "IMAGES", "bucket_name": "bike-auction-images" }],
+  // R2 (bike images) is added on Day 5. Enabling R2 can require a payment method on file, so it is
+  // deliberately not a Day-2 deploy dependency.
 
+  // Coarse, per-location, eventually consistent edge limits (BLUEPRINT §7.5).
+  "ratelimits": [
+    { "name": "AUTH_RATE_LIMIT", "namespace_id": "4101", "simple": { "limit": 20, "period": 60 } },
+  ],
+
+  // Top-level config is PRODUCTION-SAFE by default. Local development overrides these values in
+  // .dev.vars (created from .dev.vars.example by `pnpm dev`). Secrets: see src/env.d.ts.
   "vars": {
-    "ENVIRONMENT": "development",
-    "APP_VERSION": "dev",
-    "ALLOWED_ORIGINS": "http://localhost:8787,http://localhost:5173",
+    "ENVIRONMENT": "production",
+    "APP_VERSION": "unversioned",
+    "ALLOWED_ORIGINS": "",
+    // Public Turnstile site key. Replace with your widget's key (deploy script does this).
+    "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+    // Shows the public reviewer demo accounts on the sign-in page.
+    "DEMO_MODE": "true",
   },
 }
