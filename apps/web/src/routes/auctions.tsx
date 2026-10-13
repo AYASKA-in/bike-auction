@@ -1,29 +1,14 @@
-import { ListSort, ListStatus } from "@bike/contracts";
+import type { ListSort, ListStatus } from "@bike/contracts";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
-import { z } from "zod";
+import type { z } from "zod";
 import { AuctionCard, CardSkeleton } from "@/components/auction-card";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/form";
 import { Field } from "@/components/ui/field";
 import { catalogueQuery, facetsQuery, type CatalogueFilters } from "@/lib/catalogue";
 import { cn } from "@/lib/utils";
-
-const num = z.coerce.number().int().nonnegative().optional().catch(undefined);
-export const CatalogueSearch = z.object({
-  status: ListStatus.optional().catch(undefined),
-  sort: ListSort.optional().catch(undefined),
-  make: z.string().max(40).optional().catch(undefined),
-  q: z.string().max(60).optional().catch(undefined),
-  city: z.string().max(60).optional().catch(undefined),
-  yearMin: num,
-  yearMax: num,
-  ccMin: num,
-  ccMax: num,
-  priceMin: num,
-  priceMax: num,
-});
 
 const STATUS_TABS: { value: z.infer<typeof ListStatus>; label: string }[] = [
   { value: "ACTIVE", label: "Live and upcoming" },
@@ -249,7 +234,7 @@ export function AuctionsPage() {
                 <CardSkeleton key={i} />
               ))}
             </div>
-          ) : list.isError ? (
+          ) : list.isError && !list.data ? (
             <div className="rounded-xl border border-danger/30 bg-paper p-8 text-center">
               <p className="font-semibold">Couldn't load auctions.</p>
               <Button className="mt-4" variant="secondary" onClick={() => void list.refetch()}>
@@ -265,6 +250,14 @@ export function AuctionsPage() {
             </div>
           ) : (
             <>
+              {list.isRefetchError && (
+                <p
+                  role="status"
+                  className="mb-4 rounded-md bg-amber/15 px-3 py-2 text-sm font-semibold"
+                >
+                  Couldn't refresh. Prices shown may be out of date; retrying automatically.
+                </p>
+              )}
               <p className="mb-4 text-sm text-steel" aria-live="polite">
                 {items.length}
                 {list.hasNextPage ? "+" : ""} auctions
@@ -273,7 +266,7 @@ export function AuctionsPage() {
                 {items.map((a) => (
                   <li key={a.auctionId} className="flex">
                     <div className="w-full">
-                      <AuctionCard a={a} />
+                      <AuctionCard a={a} stale={list.isRefetchError} />
                     </div>
                   </li>
                 ))}

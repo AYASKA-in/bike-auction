@@ -140,11 +140,42 @@ batch's last seq. Failure: attempts++, `sync_status` updated, exponential backof
 - **Audit:** every admin mutation (bike, inspection, image, auction create/edit/schedule/cancel) is written to
   `audit_log` with admin id, time, record and a minimal, secret-free metadata object.
 
-## Known limitations (Day 5)
+## Live auction frontend (Day 6)
 
-- Nothing verified on real Cloudflare or R2 yet. Production deploys run without R2 until you approve it.
+```
+GET /auctions/:id (HTTP view) ─┐
+                               ├─▶ LiveFeed (one per auction, refcounted registry) ─▶ reduceLive (pure) ─▶ React
+WebSocket /stream ─────────────┘        │  reconnect/backoff, offline/online, visibility, heartbeat,
+GET /auctions/:id/bids (history) ◀──────┘  gap→resync, deadline→resync, history merge
+POST /auctions/:id/bids ─(201 {seq})─▶ feed.noteOwnBid → "You're leading" when that seq is the latest bid
+```
+
+- **`live-auction.ts`** is a pure reducer: seq ordering, stale-HTTP guard, leading/outbid, bid history (dedupe by
+  seq), lifecycle. **`live-feed.ts`** owns the socket and timers and is framework-free, so both are unit-tested
+  with a fake socket and fake timers. React binds via `useSyncExternalStore` (`use-live-auction.ts`): subscribing
+  acquires the feed, unsubscribing releases it; the socket closes one tick after the last user leaves (survives
+  StrictMode remounts, never leaks).
+- **Polling only as a fallback:** the HTTP view is refetched every 15 s only while the socket isn't live.
+- **Countdowns** share one 1 s ticker aligned to wall-clock seconds; only countdown leaves re-render. Device clock
+  errors are corrected by the measured server offset.
+- **Catalogue** cards never open sockets: the list refetches every 30 s while visible, on focus/reconnect, and
+  once (coalesced) when any card's start/close passes. A failed refresh marks prices "may be outdated".
+- **Bid safety:** client validation (whole rupees, ≥ minimum), confirmation above 1.5× the minimum, one
+  idempotency key per intended bid, kept for a manual retry after an uncertain failure (network/timeout/5xx),
+  never an automatic retry. Success only after the server's 201.
+- **Code splitting:** every page except home is a lazy route chunk. First load 577 KB → 490 KB (gzip 178 → 155
+  KB); no chunk over 500 KB.
+
+## Known limitations (Day 6)
+
+- Nothing verified on real Cloudflare or R2 yet (deploy pending your approval); live behaviour was tested on
+  `wrangler dev` (workerd), including a real process restart.
+- A socket keeps the identity it connected with: if the session expires mid-auction, personal fields
+  (`viewer`) stay until the next reconnect; bidding itself is refused immediately (401) and the UI asks to sign in.
+- "You've been outbid" survives reconnects but not a full page refresh (the server has no per-user
+  "was outbid" state; My Bids is Day 8).
+- The first load still carries zod and the router (~490 KB raw); `zod/mini` could cut more.
 - Price sorts use keyset paging on a value that changes while bids arrive; a card can move between pages.
-- The SPA bundle is >500 KB (one chunk); route-level code splitting is planned with the Day-7 bidding UI.
 - No bundled demo photos (no authorised images available); placeholders are shown.
 
 ## Known limitations (Day 4)

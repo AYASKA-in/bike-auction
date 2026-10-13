@@ -48,6 +48,7 @@ export function apiPost<T>(
   body: unknown,
   parse: (x: unknown) => T,
   headers: Record<string, string> = {},
+  timeoutMs?: number,
 ): Promise<T> {
   return request(
     path,
@@ -55,6 +56,8 @@ export function apiPost<T>(
       method: "POST",
       headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify(body),
+      // A timed-out request is reported as NETWORK (outcome unknown), never as a rejection.
+      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     },
     parse,
   );

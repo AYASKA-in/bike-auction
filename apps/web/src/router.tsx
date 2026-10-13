@@ -3,23 +3,20 @@ import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   redirect,
 } from "@tanstack/react-router";
 import { z } from "zod";
 import { AppShell } from "./components/app-shell";
+import { CatalogueSearch } from "./lib/catalogue-search";
 import { meQuery } from "./lib/session";
-import { AdminPage } from "./routes/admin";
-import { AdminBikeEditPage, AdminBikeNewPage } from "./routes/admin-bike-edit";
-import { AdminBikesPage } from "./routes/admin-bikes";
-import { AuctionDetailPage } from "./routes/auction-detail";
-import { AuctionsPage, CatalogueSearch } from "./routes/auctions";
 import { HomePage } from "./routes/home";
-import { LoginPage } from "./routes/login";
 import { NotFoundPage } from "./routes/not-found";
-import { RegisterPage } from "./routes/register";
 
 type RouterContext = { queryClient: QueryClient };
 
+// Pages other than home are split into their own chunks and loaded on navigation (or on link
+// hover/focus via defaultPreload: "intent").
 const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: AppShell,
   notFoundComponent: NotFoundPage,
@@ -44,7 +41,7 @@ const loginRoute = createRoute({
     if (await context.queryClient.ensureQueryData(meQuery))
       throw redirect({ to: search.redirect ?? "/" });
   },
-  component: LoginPage,
+  component: lazyRouteComponent(() => import("./routes/login"), "LoginPage"),
 });
 
 const registerRoute = createRoute({
@@ -54,19 +51,19 @@ const registerRoute = createRoute({
   beforeLoad: async ({ context }) => {
     if (await context.queryClient.ensureQueryData(meQuery)) throw redirect({ to: "/" });
   },
-  component: RegisterPage,
+  component: lazyRouteComponent(() => import("./routes/register"), "RegisterPage"),
 });
 
 const auctionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/auctions",
   validateSearch: CatalogueSearch,
-  component: AuctionsPage,
+  component: lazyRouteComponent(() => import("./routes/auctions"), "AuctionsPage"),
 });
 const auctionDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/auctions/$auctionId",
-  component: AuctionDetailPage,
+  component: lazyRouteComponent(() => import("./routes/auction-detail"), "AuctionDetailPage"),
 });
 
 // UX guard only; the API enforces roles independently (test/authz.test.ts).
@@ -82,22 +79,22 @@ const adminRoute = createRoute({
 const adminIndexRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: "/",
-  component: AdminPage,
+  component: lazyRouteComponent(() => import("./routes/admin"), "AdminPage"),
 });
 const adminBikesRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: "/bikes",
-  component: AdminBikesPage,
+  component: lazyRouteComponent(() => import("./routes/admin-bikes"), "AdminBikesPage"),
 });
 const adminBikeNewRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: "/bikes/new",
-  component: AdminBikeNewPage,
+  component: lazyRouteComponent(() => import("./routes/admin-bike-edit"), "AdminBikeNewPage"),
 });
 const adminBikeRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: "/bikes/$bikeId",
-  component: AdminBikeEditPage,
+  component: lazyRouteComponent(() => import("./routes/admin-bike-edit"), "AdminBikeEditPage"),
 });
 
 export function createAppRouter(queryClient: QueryClient) {

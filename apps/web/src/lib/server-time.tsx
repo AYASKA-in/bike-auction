@@ -1,5 +1,12 @@
 import { HealthResponse } from "@bike/contracts";
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { apiGet } from "./api";
 import { bestSample, computeOffset, type ClockSample } from "./server-clock";
 
@@ -43,13 +50,37 @@ export function useServerClock(): Ctx {
   return useContext(ServerClock);
 }
 
-/** Server "now", re-rendering every `tickMs`. */
-export function useServerNow(tickMs = 1000): number {
+// One shared 1 s ticker for every countdown on the page (not one interval per card). Only the
+// components that read it re-render; ticks align to wall-clock seconds so digits change together.
+const tickListeners = new Set<() => void>();
+let tickNow = Date.now();
+let tickTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleTick() {
+  tickTimer = setTimeout(
+    () => {
+      tickNow = Date.now();
+      for (const l of tickListeners) l();
+      scheduleTick();
+    },
+    1000 - (Date.now() % 1000) + 5,
+  );
+}
+function subscribeTick(fn: () => void) {
+  tickListeners.add(fn);
+  if (tickListeners.size === 1) {
+    tickNow = Date.now();
+    scheduleTick();
+  }
+  return () => {
+    tickListeners.delete(fn);
+    if (tickListeners.size === 0) clearTimeout(tickTimer);
+  };
+}
+const getTick = () => tickNow;
+
+/** Server "now" (device clock corrected by the measured offset), updated once per second. */
+export function useServerNow(): number {
   const { sample } = useServerClock();
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), tickMs);
-    return () => clearInterval(t);
-  }, [tickMs]);
+  const now = useSyncExternalStore(subscribeTick, getTick, getTick);
   return now + (sample?.offsetMs ?? 0);
 }

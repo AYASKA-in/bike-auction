@@ -4,10 +4,11 @@ Real-time auctions for used and repossessed two-wheelers. Each auction is run by
 Cloudflare Durable Object, so concurrent bids get a single, provable order. Built on free Cloudflare
 infrastructure. Design: [`BLUEPRINT.md`](BLUEPRINT.md) · Status: [`docs/progress.md`](docs/progress.md).
 
-> **Status: Day 5 of 10.** Accounts, roles, the auction rules engine, the real-time bidding backend, and the
-> motorcycle catalogue (bikes, inspections, private R2 photos, admin listing desk, public catalogue with
-> search/filters/sorts, auction detail page with live state) are in place and verified locally.
-> API: [`docs/api.md`](docs/api.md). Screenshots: [`docs/screenshots/day5`](docs/screenshots/day5).
+> **Status: Day 6 of 10.** Accounts, roles, the auction rules engine, the real-time bidding backend, the
+> motorcycle catalogue and admin desk, and a reliable live auction page (reconnecting WebSocket feed, live
+> price/leader/outbid, bid history, anti-sniping countdown, server-confirmed results) are in place and
+> verified locally with two buyers bidding against each other. API: [`docs/api.md`](docs/api.md).
+> Screenshots: [`docs/screenshots/day6`](docs/screenshots/day6), [`day5`](docs/screenshots/day5).
 > Not yet verified on real Cloudflare (deploy pending your approval).
 
 ## Demo accounts
@@ -71,6 +72,16 @@ python3 tests/e2e/journey.py http://127.0.0.1:8787 /tmp/e2e   # needs a seeded l
 Admin signs in → creates a bike → records an inspection → uploads a photo with GPS EXIF (checks the stored
 copy has none and is ≤2000 px) → creates a draft auction → schedules it → buyer finds it via search → opens the
 detail page (reserve not leaked) → bids → mobile filters. Screenshots go to the output folder.
+
+### Multi-user live test (two buyers + admin, real server restart)
+
+```bash
+python3 tests/e2e/live.py 8799 /tmp/e2e-live   # starts/stops its own `wrangler dev` on that port
+```
+
+Buyer A (desktop) and Buyer B (mobile) bid against each other while the admin watches: live price,
+outbid notice to the right user, anti-sniping deadline seen by all, refresh, offline → recovery, a killed and
+restarted server → automatic recovery, no duplicate bids, simultaneous bids, server-confirmed close, expired session.
 
 ### Demo catalogue
 

@@ -95,12 +95,12 @@ with sync_playwright() as p:
     b.goto(f"{BASE}/auctions?q={MODEL.split()[-1]}")
     b.get_by_role("link", name=f"Royal Enfield {MODEL}").click()
     expect(b.get_by_role("heading", name="Inspection report")).to_be_visible(timeout=15000)
-    expect(b.get_by_text("Live updates on")).to_be_visible(timeout=15000)
+    expect(b.get_by_text("Live updates connected")).to_be_visible(timeout=15000)
     expect(b.get_by_text("Reserve not met")).to_be_visible()
     assert "165000" not in b.content() and "1,65,000" not in b.content(), "reserve leaked to buyer page"
     step("detail page: photo, inspection, live feed, reserve hidden")
     b.get_by_role("button", name="Place bid").click()
-    expect(b.get_by_text("You have the highest bid.")).to_be_visible(timeout=15000)
+    expect(b.get_by_test_id("leading")).to_be_visible(timeout=15000)
     expect(b.get_by_text("₹1,50,000").first).to_be_visible(); step("buyer bid accepted; live panel updated")
     b.screenshot(path=f"{OUT}/detail-desktop.png", full_page=True)
 

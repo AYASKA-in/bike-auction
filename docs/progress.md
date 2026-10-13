@@ -178,6 +178,39 @@ desktop + mobile): **passed**.
 
 **Still unverified:** real Cloudflare and R2 (deploy and R2 activation need your approval).
 
-## Next: Day 6
+## Day 6 (13 Oct 2026): reliable real-time auction experience, complete locally
 
-Per the blueprint. Ready: catalogue + listing APIs, detail page with live state, demo data, e2e harness.
+**Built:** `LiveFeed` connection manager (one socket per auction, refcounted; back-off with jitter;
+offline/online; tab visibility and bfcache; heartbeat for half-open sockets; gap → resync → reconnect; deadline →
+resync); pure live reducer with stale-HTTP guard, authoritative leading/outbid, history merge; live bid history
+with "Load older bids"; connection indicator (connecting / live / catching up / reconnecting / offline / failed +
+"last updated", Retry now); stale values marked and bidding paused while disconnected; countdown with
+d/h/m/s, never negative, never ends an auction locally; SOLD / RESERVE NOT MET / NO BIDS / cancelled results;
+safer bid form (validation, large-bid confirmation, idempotent manual retry, 15 s timeout, expired-session
+handling); mobile: live panel right after photos, large input/button, sticky price bar; catalogue
+refresh on deadline/focus/reconnect; route-level code splitting. Server: client-message limit per minute
+instead of per connection lifetime.
+
+**Tests:** 344 passing (305 → 344; +39): reducer (ordering, gaps, out-of-order, stale HTTP, leading/outbid,
+history, extension, end/cancel, cross-auction), LiveFeed (connect, reconnect/backoff, failed + retry,
+offline/online, visibility, heartbeat, gap → resync timeout, deadline, garbage/late messages, cleanup, registry
+reuse), bid intent (keys, retry, messages), countdown format; Worker: message-rate window, recovery after DO
+restart with contiguous seqs, no cross-auction events. Browser: `tests/e2e/live.py` (3 contexts, real server
+restart) **passed**; Day-5 `journey.py` **passed**.
+
+**Bugs found and fixed:**
+
+- Bidders never saw "You're leading" from the socket alone (every `bid.accepted` cleared it); fixed with the
+  201's seq, without guessing.
+- A buyer who missed events while disconnected was not told they had been outbid; the reconnect snapshot now
+  detects it.
+- "You're leading" stayed confirmed while offline; it now reads "at the last update, reconnecting to confirm".
+- A socket's lifetime cap of 30 client messages would have dropped long-lived tabs that resync on tab switches.
+- At the deadline the page only waited for the alarm's broadcast; it now also asks the server (resync), which
+  resolves a due close.
+
+**Still unverified:** real Cloudflare (you run `pnpm deploy`).
+
+## Next: Day 7
+
+Per the blueprint. Ready: live feed and reducer to build the full bidding UI on, multi-user e2e harness.

@@ -8,7 +8,7 @@ import { Skeleton } from "./ui/skeleton";
  */
 export function AuctionClock() {
   const { sample, status } = useServerClock();
-  const serverNow = useServerNow(250);
+  const serverNow = useServerNow();
   return (
     <section
       aria-labelledby="clock-heading"

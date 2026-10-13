@@ -1,15 +1,24 @@
-import { INSPECTION_SECTIONS, type PublicAuctionView, type PublicBike } from "@bike/contracts";
+import {
+  INSPECTION_SECTIONS,
+  PlaceBidResult,
+  type PublicAuctionView,
+  type PublicBike,
+  type PublicBid,
+} from "@bike/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Countdown } from "@/components/countdown";
 import { BikePlaceholder, GradeBadge, StatusBadge } from "@/components/status";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, apiPost } from "@/lib/api";
+import { BidIntent, bidErrorMessage, checkBid, isUncertain } from "@/lib/bid-intent";
 import { detailsQuery, liveViewQuery } from "@/lib/catalogue";
-import { formatINR, formatIST, formatKm, ownersLabel } from "@/lib/format";
+import { formatINR, formatIST, formatISTTime, formatKm, ownersLabel } from "@/lib/format";
+import type { ConnStatus, LiveState } from "@/lib/live-auction";
+import { peekFeed, type LiveFeed } from "@/lib/live-feed";
 import { useMe } from "@/lib/session";
 import { useLiveAuction } from "@/lib/use-live-auction";
 import { cn } from "@/lib/utils";
@@ -17,8 +26,13 @@ import { cn } from "@/lib/utils";
 export function AuctionDetailPage() {
   const { auctionId } = useParams({ from: "/auctions/$auctionId" });
   const details = useQuery(detailsQuery(auctionId));
-  const seed = useQuery(liveViewQuery(auctionId));
-  const live = useLiveAuction(auctionId, seed.data);
+  // HTTP view: first paint + fallback while the socket is down. No polling while it is healthy.
+  const seed = useQuery({
+    ...liveViewQuery(auctionId),
+    refetchInterval: () => (peekFeed(auctionId)?.getState().status === "live" ? false : 15_000),
+  });
+  const { state: live, feed } = useLiveAuction(auctionId, seed.data);
+  const panelRef = useRef<HTMLElement>(null);
 
   if (details.isError) {
     return (
@@ -36,7 +50,7 @@ export function AuctionDetailPage() {
   }
   const bike = details.data?.bike;
   return (
-    <article className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+    <article className="mx-auto max-w-6xl px-4 pt-8 pb-28 sm:px-6 lg:pb-8">
       <nav aria-label="Breadcrumb" className="text-sm text-steel">
         <Link to="/auctions" className="underline underline-offset-4">
           Auctions
@@ -53,13 +67,25 @@ export function AuctionDetailPage() {
         </header>
       )}
 
+      {/* Mobile order: photos → live panel → bids → details. Desktop: panel in a sticky side column. */}
       <div className="mt-6 grid gap-8 lg:grid-cols-[1fr_24rem]">
-        <div className="min-w-0 space-y-8">
+        <div className="min-w-0 lg:col-start-1">
           {bike ? (
             <Gallery bike={bike} title={details.data!.title} />
           ) : (
             <Skeleton className="aspect-[4/3] w-full" />
           )}
+        </div>
+        <aside
+          ref={panelRef}
+          id="live-panel"
+          aria-label="Live auction"
+          className="space-y-4 lg:sticky lg:top-6 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-start"
+        >
+          <LivePanel auctionId={auctionId} live={live} feed={feed} />
+          <BidHistory live={live} feed={feed} />
+        </aside>
+        <div className="min-w-0 space-y-8 lg:col-start-1">
           {bike && <Specs bike={bike} />}
           {bike && <InspectionReport bike={bike} />}
           {details.data && (
@@ -73,7 +99,7 @@ export function AuctionDetailPage() {
               <p className="mt-2 whitespace-pre-line text-steel">
                 {details.data.terms || "Standard terms apply."}
               </p>
-              {bike?.asIsWhereIs && (
+              {bike?.asIsWhereIs && !/as is,? where is/i.test(details.data.terms) && (
                 <p className="mt-3 text-sm font-semibold">
                   Sold as is, where is. Inspect the bike at the yard before bidding.
                 </p>
@@ -82,15 +108,8 @@ export function AuctionDetailPage() {
             </section>
           )}
         </div>
-        <aside className="lg:sticky lg:top-6 lg:self-start">
-          <LivePanel
-            auctionId={auctionId}
-            view={live.view}
-            connection={live.status}
-            outbid={live.outbid}
-          />
-        </aside>
       </div>
+      <MobileBar live={live} panelRef={panelRef} />
     </article>
   );
 }
@@ -255,56 +274,133 @@ function InspectionReport({ bike }: { bike: PublicBike }) {
   );
 }
 
+const CONN_COPY: Record<ConnStatus, { label: string; note?: string; dot: string }> = {
+  connecting: { label: "Connecting…", dot: "animate-pulse bg-paper/50" },
+  live: { label: "Live updates connected", dot: "bg-ledger" },
+  stale: {
+    label: "Catching up…",
+    note: "Some updates were missed. Refreshing from the server.",
+    dot: "animate-pulse bg-amber",
+  },
+  reconnecting: {
+    label: "Reconnecting…",
+    note: "Connection lost. Figures below may be out of date.",
+    dot: "animate-pulse bg-amber",
+  },
+  offline: {
+    label: "Offline",
+    note: "You're offline. Figures below may be out of date; bidding is paused.",
+    dot: "bg-danger",
+  },
+  failed: {
+    label: "Connection failed",
+    note: "We can't reach the live feed. Figures may be out of date.",
+    dot: "bg-danger",
+  },
+};
+
+function ConnectionIndicator({ live, feed }: { live: LiveState; feed: LiveFeed | null }) {
+  const c = CONN_COPY[live.status];
+  return (
+    <div className="text-xs">
+      <p role="status" className="inline-flex items-center gap-2" data-conn={live.status}>
+        <span aria-hidden="true" className={cn("size-2 rounded-full", c.dot)} />
+        {c.label}
+      </p>
+      {c.note && live.view && (
+        <p className="mt-1 text-paper/70">
+          {c.note}
+          {live.syncedAt !== null && <> Last updated {formatISTTime(live.syncedAt)}.</>}
+          {(live.status === "failed" || live.status === "reconnecting") && feed && (
+            <button
+              type="button"
+              onClick={() => feed.retryNow()}
+              className="ml-2 font-semibold underline underline-offset-2"
+            >
+              Retry now
+            </button>
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
+
+const RESULT: Record<NonNullable<PublicAuctionView["outcome"]>, string> = {
+  SOLD: "Sold",
+  RESERVE_NOT_MET: "Reserve not met. Not sold.",
+  NO_BIDS: "Ended with no bids.",
+};
+
 function LivePanel({
   auctionId,
-  view,
-  connection,
-  outbid,
+  live,
+  feed,
 }: {
   auctionId: string;
-  view: PublicAuctionView | null;
-  connection: string;
-  outbid: { minNextBidMinor: number } | null;
+  live: LiveState;
+  feed: LiveFeed | null;
 }) {
+  const view = live.view;
   if (!view) return <Skeleton className="h-80 w-full rounded-xl" />;
+  const stale = live.status !== "live";
   const priceLabel =
     view.status === "ENDED"
       ? view.outcome === "SOLD"
         ? "Sold for"
-        : "Final bid"
+        : view.currentPriceMinor === null
+          ? "Starting bid"
+          : "Highest bid"
       : view.currentPriceMinor === null
         ? "Starting bid"
         : "Current bid";
+  const leading = view.viewer?.isLeading === true && view.status === "LIVE";
   return (
-    <div className="rounded-xl bg-asphalt p-5 text-paper">
-      <div className="flex items-center justify-between gap-3 text-sm">
-        <span className="font-semibold text-paper/80">{priceLabel}</span>
-        <span role="status" className="inline-flex items-center gap-2 text-xs">
-          <span
-            aria-hidden="true"
-            className={cn(
-              "size-2 rounded-full",
-              connection === "live"
-                ? "bg-hivis"
-                : connection === "stale"
-                  ? "bg-danger"
-                  : "animate-pulse bg-paper/50",
-            )}
-          />
-          {connection === "live"
-            ? "Live updates on"
-            : connection === "stale"
-              ? "Reconnecting…"
-              : "Connecting…"}
-        </span>
-      </div>
-      <p className="mt-1 font-expanded text-4xl font-extrabold tnum">
+    <section className="rounded-xl bg-asphalt p-5 text-paper" aria-labelledby="price-h">
+      <ConnectionIndicator live={live} feed={feed} />
+      {leading && !stale && (
+        <p
+          role="status"
+          data-testid="leading"
+          className="mt-3 rounded-md bg-ledger px-3 py-2 font-bold"
+        >
+          You're leading
+        </p>
+      )}
+      {leading && stale && (
+        <p
+          data-testid="leading-unconfirmed"
+          className="mt-3 rounded-md bg-asphalt-2 px-3 py-2 text-sm"
+        >
+          You were leading at the last update. Reconnecting to confirm…
+        </p>
+      )}
+      {live.outbid && !leading && view.status === "LIVE" && (
+        <p
+          role="alert"
+          data-testid="outbid"
+          className="mt-3 rounded-md bg-hivis px-3 py-2 font-bold text-white"
+        >
+          You've been outbid. New minimum{" "}
+          {formatINR(view.minNextBidMinor ?? live.outbid.minNextBidMinor)}.
+        </p>
+      )}
+      <p id="price-h" className="mt-3 text-sm font-semibold text-paper/80">
+        {priceLabel}
+        {stale && <span className="ml-2 text-xs font-normal text-amber">(may be outdated)</span>}
+      </p>
+      <p
+        data-testid="price"
+        className={cn("font-expanded text-4xl font-extrabold tnum", stale && "opacity-70")}
+      >
         {formatINR(view.currentPriceMinor ?? view.startPriceMinor)}
       </p>
       <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div>
           <dt className="text-paper/60">Bids</dt>
-          <dd className="font-semibold tnum">{view.bidCount}</dd>
+          <dd data-testid="bid-count" className="font-semibold tnum">
+            {view.bidCount}
+          </dd>
         </div>
         <div>
           <dt className="text-paper/60">Reserve</dt>
@@ -312,151 +408,360 @@ function LivePanel({
             {!view.hasReserve ? "No reserve" : view.reserveMet ? "Reserve met" : "Reserve not met"}
           </dd>
         </div>
+        {view.status === "LIVE" && view.minNextBidMinor !== null && (
+          <div>
+            <dt className="text-paper/60">Minimum next bid</dt>
+            <dd data-testid="min-next" className="font-semibold tnum">
+              {formatINR(view.minNextBidMinor)}
+            </dd>
+          </div>
+        )}
+        {view.leadingBidder && view.status !== "CANCELLED" && (
+          <div>
+            <dt className="text-paper/60">{view.status === "ENDED" ? "Winner" : "Leading"}</dt>
+            <dd data-testid="leader" className="font-semibold">
+              {view.status === "ENDED" && view.outcome !== "SOLD"
+                ? "No winner"
+                : view.viewer?.isLeading || view.viewer?.isWinner
+                  ? `You (${view.leadingBidder})`
+                  : view.leadingBidder}
+            </dd>
+          </div>
+        )}
         <div>
           <dt className="text-paper/60">Starts</dt>
           <dd className="font-semibold">{formatIST(view.startsAt)}</dd>
         </div>
         <div>
-          <dt className="text-paper/60">Closes</dt>
-          <dd className="font-semibold">{formatIST(view.closesAt)}</dd>
+          <dt className="text-paper/60">{view.status === "ENDED" ? "Closed" : "Closes"}</dt>
+          <dd data-testid="closes" data-ms={view.closesAt} className="font-semibold">
+            {formatIST(view.closesAt)}
+          </dd>
         </div>
-        {view.leadingBidder && (
-          <div className="col-span-2">
-            <dt className="text-paper/60">Leading</dt>
-            <dd className="font-semibold">{view.viewer?.isLeading ? "You" : view.leadingBidder}</dd>
-          </div>
-        )}
       </dl>
-      <p className="mt-4 rounded-md bg-asphalt-2 px-3 py-2 text-sm">
-        <Countdown status={view.status} startsAt={view.startsAt} closesAt={view.closesAt} />
+      <p
+        data-testid="countdown"
+        className="mt-4 rounded-md bg-asphalt-2 px-3 py-2 text-center font-expanded text-lg font-bold"
+      >
+        <Countdown full status={view.status} startsAt={view.startsAt} closesAt={view.closesAt} />
       </p>
       {view.extensionCount > 0 && view.status === "LIVE" && (
-        <p className="mt-2 text-xs text-paper/70">
+        <p className="mt-2 text-xs text-paper/70" data-testid="extended">
           Extended {view.extensionCount}× by late bids (anti-sniping).
         </p>
       )}
       {view.status === "LIVE" && (
-        <BidForm
-          auctionId={auctionId}
-          view={view}
-          disabled={connection !== "live"}
-          outbidMin={outbid?.minNextBidMinor ?? null}
-        />
+        <BidForm auctionId={auctionId} view={view} feed={feed} paused={stale} />
       )}
-      {view.status === "ENDED" && view.viewer?.isWinner && (
-        <p className="mt-4 rounded-md bg-ledger px-3 py-2 font-semibold">
-          You won this auction. Our team will contact you.
+      {view.status === "ENDED" && view.outcome && (
+        <p data-testid="result" className="mt-4 rounded-md bg-asphalt-2 px-3 py-2 font-semibold">
+          {view.outcome === "SOLD"
+            ? view.viewer?.isWinner
+              ? "You won this auction. Our team will contact you."
+              : `Sold to ${view.leadingBidder ?? "the highest bidder"}.`
+            : RESULT[view.outcome]}
         </p>
       )}
-    </div>
+      {view.status === "CANCELLED" && (
+        <p data-testid="result" className="mt-4 rounded-md bg-asphalt-2 px-3 py-2 font-semibold">
+          This auction was cancelled. No sale will take place.
+        </p>
+      )}
+    </section>
   );
 }
 
-/** Minimal working bid form (the full bidding experience is Day 7). Server is the authority. */
+/** Bid form. Success is shown only after the server's 201; a timeout never places a new bid. */
 function BidForm({
   auctionId,
   view,
-  disabled,
-  outbidMin,
+  feed,
+  paused,
 }: {
   auctionId: string;
   view: PublicAuctionView;
-  disabled: boolean;
-  outbidMin: number | null;
+  feed: LiveFeed | null;
+  paused: boolean;
 }) {
   const me = useMe();
   const qc = useQueryClient();
   const min = view.minNextBidMinor ?? view.startPriceMinor;
   const [rupees, setRupees] = useState(String(min / 100));
-  const keyRef = useRef<string | null>(null);
+  const [confirming, setConfirming] = useState<number | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [intent] = useState(() => new BidIntent());
   const lastMin = useRef(min);
   useEffect(() => {
     if (min !== lastMin.current) {
       lastMin.current = min;
       setRupees(String(min / 100));
+      setConfirming(null);
     }
   }, [min]);
   const bid = useMutation({
-    // Reusing the key for a retry of the SAME amount makes network retries safe.
     mutationFn: (amountMinor: number) =>
-      apiPost(`/auctions/${auctionId}/bids`, { amountMinor }, (x) => x, {
-        "idempotency-key": (keyRef.current ??= crypto.randomUUID()),
-      }),
-    onSuccess: () => {
-      keyRef.current = null;
+      apiPost(
+        `/auctions/${auctionId}/bids`,
+        { amountMinor },
+        (x) => PlaceBidResult.parse(x),
+        { "idempotency-key": intent.keyFor(amountMinor) },
+        15_000,
+      ),
+    retry: false, // never automatic: an uncertain failure is retried only by the user, same key
+    onSuccess: (r) => {
+      intent.settle(null);
+      feed?.noteOwnBid(r);
       void qc.invalidateQueries({ queryKey: ["view", auctionId] });
     },
     onError: (e) => {
-      if (e instanceof ApiError && e.code !== "NETWORK") keyRef.current = null; // definitive answer: next try is a new intent
+      intent.settle(e);
+      if (e instanceof ApiError && e.code === "AUTH_REQUIRED")
+        void qc.invalidateQueries({ queryKey: ["me"] });
+      if (!isUncertain(e)) void qc.invalidateQueries({ queryKey: ["view", auctionId] });
     },
   });
   if (!me.data) {
     return (
-      <Link
-        to="/login"
-        search={{ redirect: `/auctions/${auctionId}` }}
-        className="mt-4 block rounded-md bg-hivis px-4 py-3 text-center font-semibold text-white"
-      >
-        Sign in to bid
-      </Link>
+      <div className="mt-4 space-y-2">
+        {bid.error instanceof ApiError && bid.error.code === "AUTH_REQUIRED" && (
+          <Alert>Your session has expired. Sign in again to bid.</Alert>
+        )}
+        <Link
+          to="/login"
+          search={{ redirect: `/auctions/${auctionId}` }}
+          className="block rounded-md bg-hivis px-4 py-3 text-center font-semibold text-white"
+        >
+          Sign in to bid
+        </Link>
+      </div>
     );
   }
   if (me.data.role === "ADMIN")
     return <p className="mt-4 text-sm text-paper/70">Administrators can't bid.</p>;
+
+  const send = (amountMinor: number) => {
+    setConfirming(null);
+    bid.mutate(amountMinor);
+  };
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const amount = Math.round(Number(rupees) * 100);
-    if (Number.isFinite(amount) && amount > 0) bid.mutate(amount);
+    if (bid.isPending) return;
+    const c = checkBid(rupees, min);
+    if (!c.ok) {
+      setLocalError(c.message);
+      return;
+    }
+    setLocalError(null);
+    if (c.needsConfirm && confirming !== c.amountMinor) {
+      setConfirming(c.amountMinor);
+      return;
+    }
+    send(c.amountMinor);
   };
+  const retryAmount = bid.isError && isUncertain(bid.error) ? intent.pendingRetryAmount : null;
+  const leading = view.viewer?.isLeading === true;
   return (
-    <form onSubmit={submit} className="mt-4 space-y-3">
-      {view.viewer?.isLeading && (
-        <p className="rounded-md bg-ledger px-3 py-2 text-sm font-semibold">
-          You have the highest bid.
+    <form onSubmit={submit} className="mt-4 space-y-3" noValidate>
+      <label className="block text-sm font-semibold" htmlFor="bid-amount">
+        Your bid in ₹ (minimum {formatINR(min)})
+      </label>
+      <div className="flex gap-2">
+        <input
+          id="bid-amount"
+          inputMode="numeric"
+          autoComplete="off"
+          value={rupees}
+          aria-invalid={localError !== null}
+          aria-describedby={localError ? "bid-error" : undefined}
+          onChange={(e) => {
+            setRupees(e.target.value.replace(/[^\d]/g, ""));
+            setConfirming(null);
+            setLocalError(null);
+          }}
+          className="h-14 w-full min-w-0 rounded-md bg-paper px-3 font-expanded text-xl font-bold text-asphalt tnum"
+        />
+        <button
+          type="button"
+          onClick={() => setRupees(String(min / 100))}
+          className="shrink-0 rounded-md border border-paper/30 px-3 text-sm font-semibold"
+        >
+          Min
+        </button>
+      </div>
+      {localError && (
+        <p id="bid-error" className="text-sm font-semibold text-amber">
+          {localError}
         </p>
       )}
-      {outbidMin !== null && !view.viewer?.isLeading && (
-        <p className="rounded-md bg-amber px-3 py-2 text-sm font-semibold">You've been outbid.</p>
+      {confirming !== null ? (
+        <div
+          role="alertdialog"
+          aria-label="Confirm large bid"
+          className="space-y-2 rounded-md bg-asphalt-2 p-3"
+        >
+          <p className="text-sm">
+            {formatINR(confirming)} is well above the minimum ({formatINR(min)}). Place this bid?
+          </p>
+          <div className="flex gap-2">
+            <Button type="button" size="lg" className="flex-1" onClick={() => send(confirming)}>
+              Yes, bid {formatINR(confirming)}
+            </Button>
+            <Button
+              type="button"
+              size="lg"
+              variant="ghost"
+              className="flex-1 bg-paper text-asphalt"
+              onClick={() => setConfirming(null)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button
+          type="submit"
+          size="lg"
+          className="h-14 w-full text-lg"
+          disabled={paused || bid.isPending || leading}
+        >
+          {bid.isPending
+            ? "Placing bid…"
+            : leading
+              ? "You have the highest bid"
+              : paused
+                ? "Bidding paused while reconnecting"
+                : `Place bid ${formatINR(Number(rupees || 0) * 100)}`}
+        </Button>
       )}
-      <label className="block text-sm font-semibold" htmlFor="bid-amount">
-        Your bid (₹), minimum {formatINR(min)}
-      </label>
-      <input
-        id="bid-amount"
-        inputMode="numeric"
-        value={rupees}
-        onChange={(e) => setRupees(e.target.value.replace(/[^\d]/g, ""))}
-        className="h-12 w-full rounded-md bg-paper px-3 text-lg font-bold text-asphalt tnum"
-      />
-      <Button
-        type="submit"
-        size="lg"
-        className="w-full"
-        disabled={disabled || bid.isPending || view.viewer?.isLeading === true}
-      >
-        {bid.isPending
-          ? "Placing bid…"
-          : `Place bid ${formatINR(Math.round(Number(rupees || 0) * 100))}`}
-      </Button>
-      {bid.isError && <Alert>{bidError(bid.error)}</Alert>}
-      {bid.isSuccess && (
-        <p className="text-sm text-paper/80" role="status">
-          Bid placed.
+      {bid.isError && (
+        <Alert>
+          {bidErrorMessage(bid.error)}
+          {retryAmount !== null && (
+            <button
+              type="button"
+              className="ml-2 font-semibold underline underline-offset-2"
+              onClick={() => bid.mutate(retryAmount)}
+            >
+              Retry {formatINR(retryAmount)}
+            </button>
+          )}
+        </Alert>
+      )}
+      {bid.isSuccess && !bid.isPending && (
+        <p className="text-sm text-paper/80" role="status" data-testid="bid-confirmed">
+          Bid of {formatINR(bid.data.amountMinor)} accepted.
         </p>
       )}
     </form>
   );
 }
 
-function bidError(e: unknown): string {
-  if (!(e instanceof ApiError)) return "Something went wrong.";
-  const map: Partial<Record<string, string>> = {
-    BID_TOO_LOW: "Someone bid first. The minimum has gone up.",
-    ALREADY_LEADING: "You already have the highest bid.",
-    BID_UNREASONABLE: "That's far above the current price. Check the amount.",
-    AUCTION_ENDED: "This auction has ended.",
-    RATE_LIMITED: "You're bidding very fast. Wait a moment.",
-    NETWORK: "Connection problem. Press the button again; your bid won't be placed twice.",
-  };
-  return map[e.code] ?? e.detail ?? "Your bid wasn't placed.";
+function BidHistory({ live, feed }: { live: LiveState; feed: LiveFeed | null }) {
+  const [loading, setLoading] = useState(false);
+  if (!live.view || live.view.bidCount === 0) return null;
+  const more = live.olderCursor !== null && live.olderCursor !== undefined;
+  return (
+    <section aria-labelledby="bids-h" className="rounded-xl border border-rule bg-paper p-4">
+      <h2 id="bids-h" className="text-base font-bold">
+        Recent bids
+      </h2>
+      {live.bids.length === 0 ? (
+        <p className="mt-2 text-sm text-steel">Loading bids…</p>
+      ) : (
+        <ol className="mt-2 divide-y divide-rule text-sm" data-testid="bid-history">
+          {live.bids.map((b: PublicBid, i) => (
+            <li
+              key={b.seq}
+              data-seq={b.seq}
+              className={cn(
+                "flex items-center justify-between gap-3 py-2",
+                i === 0 && "font-semibold",
+              )}
+            >
+              <span>
+                {b.bidder}
+                {b.isYou && (
+                  <span className="ml-2 rounded bg-ledger/15 px-1.5 py-0.5 text-xs font-bold text-ledger">
+                    You
+                  </span>
+                )}
+              </span>
+              <span className="text-right">
+                <span className="tnum">{formatINR(b.amountMinor)}</span>
+                <span className="block text-xs font-normal text-steel tnum">
+                  {formatISTTime(b.at)}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+      {more && (
+        <button
+          type="button"
+          disabled={loading}
+          onClick={() => {
+            setLoading(true);
+            void feed?.loadOlder().finally(() => setLoading(false));
+          }}
+          className="mt-2 text-sm font-semibold underline underline-offset-4"
+        >
+          {loading ? "Loading…" : "Load older bids"}
+        </button>
+      )}
+    </section>
+  );
+}
+
+/** Mobile: price, countdown and a jump-to-bid button stay visible while reading the details. */
+function MobileBar({
+  live,
+  panelRef,
+}: {
+  live: LiveState;
+  panelRef: React.RefObject<HTMLElement | null>;
+}) {
+  const [panelVisible, setPanelVisible] = useState(true);
+  const hasView = live.view !== null;
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([e]) => setPanelVisible(e?.isIntersecting ?? true));
+    io.observe(el);
+    return () => io.disconnect();
+  }, [panelRef, hasView]);
+  const jump = useCallback(() => {
+    panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [panelRef]);
+  const v = live.view;
+  if (!v || panelVisible) return null;
+  const leading = v.viewer?.isLeading === true && v.status === "LIVE";
+  return (
+    <div
+      data-testid="mobile-bar"
+      className="fixed inset-x-0 bottom-0 z-20 border-t border-asphalt-2 bg-asphalt px-4 py-3 text-paper lg:hidden"
+    >
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-expanded text-xl font-extrabold tnum">
+            {formatINR(v.currentPriceMinor ?? v.startPriceMinor)}
+            {live.status !== "live" && (
+              <span className="ml-2 text-xs font-normal text-amber">may be outdated</span>
+            )}
+          </p>
+          <p className="truncate text-xs text-paper/80">
+            {leading && live.status === "live"
+              ? "You're leading · "
+              : live.outbid && v.status === "LIVE"
+                ? "Outbid · "
+                : ""}
+            <Countdown full status={v.status} startsAt={v.startsAt} closesAt={v.closesAt} />
+          </p>
+        </div>
+        <Button type="button" size="lg" onClick={jump} className="shrink-0">
+          {v.status === "LIVE" ? "Bid" : "View"}
+        </Button>
+      </div>
+    </div>
+  );
 }

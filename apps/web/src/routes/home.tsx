@@ -130,7 +130,7 @@ function Shelf({
           <ul className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {items.map((a) => (
               <li key={a.auctionId}>
-                <AuctionCard a={a} />
+                <AuctionCard a={a} stale={q.isRefetchError} />
               </li>
             ))}
           </ul>

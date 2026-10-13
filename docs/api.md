@@ -28,9 +28,29 @@ Bid errors: `AUTH_REQUIRED` 401 · `FORBIDDEN` 403 · `NOT_FOUND` 404 · `BID_TO
 
 ## WebSocket protocol v1
 
-Server → client: `hello`, `auction.snapshot {serverTime, view}`, public events (`auction.scheduled|started|extended|cancelled|ended`, `bid.accepted`) each with `seq`, and `you.outbid` (only to the previous leader's sockets).
-Client → server: `{"type":"ping"}` (auto-answered `pong`) and `{"type":"resync"}` (fresh snapshot).
-Apply an event only if `seq === lastSeq + 1`; ignore older; on a gap go "stale" and resync (`apps/web/src/lib/live-auction.ts`).
+`GET /api/v1/auctions/:id/stream` (upgrade). Auth is the session cookie only: never a token in the URL. Origin is
+checked (cross-site WebSocket hijacking). The socket's identity is fixed at connect time; reconnecting re-reads it.
+
+Server → client: `hello {serverTime}`, `auction.snapshot {serverTime, view}` (on connect and on every resync;
+`view.viewer` is personal), public events (`auction.scheduled|started|extended|cancelled|ended`,
+`bid.accepted`) each with a contiguous `seq`, and `you.outbid` (only to the previous leader's sockets).
+Client → server: `{"type":"ping"}` (auto-answered `pong`, doesn't wake the object) and `{"type":"resync"}`
+(fresh snapshot; the object also resolves a due start/close first). At most 30 client messages per socket per
+minute; more closes the socket with 1008.
+
+**Client rules** (`apps/web/src/lib/live-auction.ts`, `live-feed.ts`):
+
+- Apply an event only if `seq === lastSeq + 1`; ignore older/duplicates; on a gap → "stale" → resync; no
+  snapshot within 5 s → reconnect.
+- An HTTP view (`GET /auctions/:id`) is applied only if its seq ≥ lastSeq.
+- "You're leading" comes only from a snapshot/HTTP `viewer`, or from your own 201 bid response whose seq is the
+  latest applied bid. A later bid by someone else while you led = outbid (even if `you.outbid` was lost).
+- Reconnect: back-off 0.5 s → 30 s with jitter; "failed" after 6 tries (keeps retrying); offline → wait for
+  `online`; tab visible / bfcache restore → reconnect now or resync; heartbeat ping every 20 s, 45 s of silence =
+  dead socket.
+- Local countdown reaching zero only triggers a resync; the auction ends when `auction.ended` (or a snapshot)
+  says so.
+- After every snapshot or seq jump, reload the newest bid page (`GET /auctions/:id/bids`) and merge by seq.
 
 ## Admin (role ADMIN; every mutation written to `audit_log`)
 

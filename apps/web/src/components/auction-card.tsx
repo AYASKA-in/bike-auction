@@ -1,10 +1,15 @@
 import type { AuctionCard as Card } from "@bike/contracts";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { useCallback } from "react";
+import { refreshCatalogueSoon } from "@/lib/catalogue";
 import { formatINR, formatKm, ownersLabel } from "@/lib/format";
 import { Countdown } from "./countdown";
 import { BikePlaceholder, GradeBadge, StatusBadge } from "./status";
 
-export function AuctionCard({ a }: { a: Card }) {
+export function AuctionCard({ a, stale = false }: { a: Card; stale?: boolean }) {
+  const qc = useQueryClient();
+  const onDue = useCallback(() => refreshCatalogueSoon(qc), [qc]);
   const price = a.currentPriceMinor ?? a.startPriceMinor;
   const priceLabel =
     a.status === "ENDED"
@@ -59,7 +64,12 @@ export function AuctionCard({ a }: { a: Card }) {
         </ul>
         <div className="mt-auto flex items-end justify-between gap-3 border-t border-rule pt-3">
           <div>
-            <p className="text-xs font-semibold text-steel">{priceLabel}</p>
+            <p className="text-xs font-semibold text-steel">
+              {priceLabel}
+              {stale && a.status === "LIVE" && (
+                <span className="font-normal"> (may be outdated)</span>
+              )}
+            </p>
             <p className="font-expanded text-2xl font-extrabold tnum">{formatINR(price)}</p>
           </div>
           <div className="text-right text-sm">
@@ -67,7 +77,12 @@ export function AuctionCard({ a }: { a: Card }) {
               {a.bidCount} {a.bidCount === 1 ? "bid" : "bids"}
             </p>
             <p>
-              <Countdown status={a.status} startsAt={a.startsAt} closesAt={a.closesAt} />
+              <Countdown
+                status={a.status}
+                startsAt={a.startsAt}
+                closesAt={a.closesAt}
+                onDue={onDue}
+              />
             </p>
           </div>
         </div>

@@ -5,7 +5,7 @@ import {
   type ListSort,
   type ListStatus,
 } from "@bike/contracts";
-import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiGet } from "./api";
 
@@ -44,8 +44,28 @@ export const catalogueQuery = (f: CatalogueFilters, limit = 12) =>
         signal,
       ),
     getNextPageParam: (last) => last.nextCursor,
+    // Cards never open sockets: one light D1-backed list request every 30 s while visible
+    // (TanStack pauses it in background tabs), plus a refetch on focus/reconnect.
     refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
+
+let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+let lastRefresh = 0;
+/**
+ * A card's start/close time passed: refresh the catalogue once, shortly after (the server has
+ * resolved the status by then). Coalesces many cards into one request; at most every 5 s.
+ */
+export function refreshCatalogueSoon(qc: QueryClient): void {
+  if (refreshTimer !== undefined) return;
+  const wait = Math.max(2_000, lastRefresh + 5_000 - Date.now());
+  refreshTimer = setTimeout(() => {
+    refreshTimer = undefined;
+    lastRefresh = Date.now();
+    void qc.invalidateQueries({ queryKey: ["catalogue"] });
+  }, wait);
+}
 
 const Facets = z.object({ makes: z.array(z.string()), cities: z.array(z.string()) });
 export const facetsQuery = queryOptions({

@@ -85,11 +85,18 @@ export interface PublicBid {
 
 const OUTBOX_BATCH = 100;
 const OUTBOX_MAX_BACKOFF_MS = 60_000;
+/** Client → server messages (resyncs) allowed per socket per minute; pings are auto-answered. */
 const MAX_CLIENT_MESSAGES = 30;
+const CLIENT_MESSAGE_WINDOW_MS = 60_000;
 /** Exact per-user, per-auction command throttle, persisted in SQLite (survives restarts). */
 const BID_THROTTLE = { limit: 10, windowMs: 10_000 };
 
-type Attachment = { userId: string | null; connectedAt: number; messages: number };
+type Attachment = {
+  userId: string | null;
+  connectedAt: number;
+  messages: number;
+  windowStart?: number;
+};
 
 export class AuctionDO extends DurableObject<Env> {
   private readonly sql: SqlStorage;
@@ -768,6 +775,13 @@ export class AuctionDO extends DurableObject<Env> {
       connectedAt: 0,
       messages: 0,
     }) as Attachment;
+    // Fixed one-minute window: a long-lived tab that resyncs on every visibility change stays
+    // well within it; a client spamming messages is cut off.
+    const now = Date.now();
+    if (att.windowStart === undefined || now - att.windowStart >= CLIENT_MESSAGE_WINDOW_MS) {
+      att.windowStart = now;
+      att.messages = 0;
+    }
     att.messages += 1;
     ws.serializeAttachment(att);
     if (att.messages > MAX_CLIENT_MESSAGES) {

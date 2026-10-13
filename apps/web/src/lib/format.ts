@@ -20,6 +20,29 @@ export function duration(ms: number): string {
   return `${s % 60}s`;
 }
 
+/** Countdown with seconds: "2d 03h 04m 05s", "3h 04m 05s", "4m 05s", "5s". Never negative. */
+export function durationFull(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = `${String(s % 60).padStart(2, "0")}s`;
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  if (d > 0) return `${d}d ${p2(h)}h ${p2(m)}m ${ss}`;
+  if (h > 0) return `${h}h ${p2(m)}m ${ss}`;
+  if (m > 0) return `${m}m ${ss}`;
+  return `${s % 60}s`;
+}
+
+const IST_TIME = new Intl.DateTimeFormat("en-IN", {
+  timeZone: "Asia/Kolkata",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
+/** "4:05:09 pm" in IST, for bid-history rows. */
+export const formatISTTime = (ms: number) => IST_TIME.format(ms);
+
 const IST = new Intl.DateTimeFormat("en-IN", {
   timeZone: "Asia/Kolkata",
   day: "numeric",
