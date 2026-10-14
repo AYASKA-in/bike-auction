@@ -18,6 +18,9 @@ cannot reach `api.cloudflare.com`. Items marked ✅ were verified locally; ⏳ i
    node scripts/deploy.mjs --turnstile-site-key <site key> --turnstile-secret-key <secret key>
    ```
 
+   **On Windows you can instead double-click `deploy-windows.cmd`.** It installs dependencies, asks for the two
+   keys (the secret is typed hidden) and runs the same script.
+
    **Use `node scripts/deploy.mjs`, not `pnpm deploy`.** In pnpm 10, `pnpm deploy` runs pnpm's own built-in
    command instead of this script.
 
