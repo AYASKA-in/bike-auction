@@ -1,8 +1,13 @@
 # Deployment checklist (Cloudflare Workers, free plan)
 
-**Status: not yet deployed.** Every step below is scripted and dry-run checked (`pnpm check` ends with a
-`wrangler deploy --dry-run`), but the real deploy needs the account owner's terminal. The development sandbox
-cannot reach `api.cloudflare.com`. Items marked ✅ were verified locally; ⏳ items can only be verified on Cloudflare.
+**Status: deployed 14 Oct 2026** to https://bike-auction.skiranbot.workers.dev (version `6e3355d`), free plan,
+no R2, demo mode off. Checked on Cloudflare: `/api/v1/status` reports the version with D1 `ok`; CSP, HSTS and
+`nosniff` headers present; the Turnstile widget renders under the CSP. Not yet checked on Cloudflare: the signed-in
+smoke test below (registration, bidding, live updates, close), WebSockets, alarms and the cron run.
+
+Deploy notes learned on the first run: wrangler 4.149's `d1 create` offers to rewrite `wrangler.jsonc` (the script
+now restores it and builds the deploy config by parsing it), and Analytics Engine must be enabled once in the
+dashboard (free) before the first deploy.
 
 ## What you (the account owner) must do
 
