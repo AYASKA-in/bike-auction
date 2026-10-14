@@ -53,16 +53,39 @@ function wrangler(cmdArgs, { capture = false, input, env = {} } = {}) {
   return r.stdout ?? "";
 }
 
-// 0. Config: by default strip the R2 binding into a generated deploy config (never commit it).
+// 0. Config. The deploy uses a generated wrangler.deploy.jsonc (git-ignored) built by PARSING
+// wrangler.jsonc, so wrangler.jsonc itself is never edited. By default the R2 binding is dropped.
+// JSONC → JSON: strips line and block comments and trailing commas (string-aware).
+function parseJsonc(text) {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j;
+    } else if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      out += "\n";
+    } else if (c === "/" && text[i + 1] === "*") {
+      i = text.indexOf("*/", i + 2) + 1;
+      if (i === 0) throw new Error("Unterminated comment in wrangler.jsonc");
+    } else out += c;
+  }
+  return JSON.parse(out.replace(/,(\s*[\]}])/g, "$1"));
+}
 const withR2 = has("with-r2");
 const deployConfig = join(worker, "wrangler.deploy.jsonc");
-const writeDeployConfig = () =>
-  writeFileSync(
-    deployConfig,
-    withR2
-      ? readFileSync(wranglerConfig, "utf8")
-      : readFileSync(wranglerConfig, "utf8").replace(/^\s*"r2_buckets":.*$/m, ""),
-  );
+const writeDeployConfig = (databaseId) => {
+  const conf = parseJsonc(readFileSync(wranglerConfig, "utf8"));
+  // Only the DB binding the app uses (newer wrangler versions may offer to add their own).
+  conf.d1_databases = (conf.d1_databases ?? [])
+    .filter((d) => d.binding === "DB")
+    .map((d) => ({ ...d, database_id: databaseId }));
+  if (!withR2) delete conf.r2_buckets;
+  writeFileSync(deployConfig, JSON.stringify(conf, null, 2));
+};
 const CFG = ["--config", "wrangler.deploy.jsonc"];
 
 // 1. Auth
@@ -86,18 +109,18 @@ const findDb = () =>
   JSON.parse(wrangler(["d1", "list", "--json"], { capture: true })).find((d) => d.name === DB_NAME);
 let db = findDb();
 if (!db) {
-  wrangler(["d1", "create", DB_NAME]);
+  // Newer wrangler versions offer to rewrite wrangler.jsonc here; keep the file exactly as it was.
+  const before = readFileSync(wranglerConfig, "utf8");
+  try {
+    wrangler(["d1", "create", DB_NAME], { env: { CI: "true" } });
+  } finally {
+    writeFileSync(wranglerConfig, before);
+  }
   db = findDb();
 }
 if (!db?.uuid) throw new Error("Could not determine D1 database id");
-const cfg = readFileSync(wranglerConfig, "utf8");
-const patched = cfg.replace(/"database_id":\s*"[^"]*"/, `"database_id": "${db.uuid}"`);
-if (patched !== cfg) {
-  writeFileSync(wranglerConfig, patched);
-  console.log(`  wrote database_id ${db.uuid} to apps/worker/wrangler.jsonc (commit this change)`);
-}
-
-writeDeployConfig(); // after the database id is known
+writeDeployConfig(db.uuid); // wrangler.jsonc keeps its local placeholder id
+console.log(`  using D1 database ${db.uuid}`);
 
 // 3. Secrets (generated once, reused on re-runs)
 const secrets = existsSync(secretsFile) ? JSON.parse(readFileSync(secretsFile, "utf8")) : {};
