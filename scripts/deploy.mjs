@@ -77,13 +77,17 @@ function parseJsonc(text) {
 }
 const withR2 = has("with-r2");
 const deployConfig = join(worker, "wrangler.deploy.jsonc");
-const writeDeployConfig = (databaseId) => {
+const writeDeployConfig = (databaseId, photosKvId) => {
   const conf = parseJsonc(readFileSync(wranglerConfig, "utf8"));
   // Only the DB binding the app uses (newer wrangler versions may offer to add their own).
   conf.d1_databases = (conf.d1_databases ?? [])
     .filter((d) => d.binding === "DB")
     .map((d) => ({ ...d, database_id: databaseId }));
   if (!withR2) delete conf.r2_buckets;
+  // Photos fall back to Workers KV (free plan) when R2 is not bound; see src/lib/image-store.ts.
+  conf.kv_namespaces = (conf.kv_namespaces ?? [])
+    .filter((k) => k.binding === "PHOTOS")
+    .map((k) => ({ ...k, id: photosKvId }));
   writeFileSync(deployConfig, JSON.stringify(conf, null, 2));
 };
 const CFG = ["--config", "wrangler.deploy.jsonc"];
@@ -119,8 +123,29 @@ if (!db) {
   db = findDb();
 }
 if (!db?.uuid) throw new Error("Could not determine D1 database id");
-writeDeployConfig(db.uuid); // wrangler.jsonc keeps its local placeholder id
 console.log(`  using D1 database ${db.uuid}`);
+
+// 2b. KV namespace for photos (free; used when R2 is not enabled)
+const KV_TITLE = "bike-auction-photos";
+step(`Ensuring KV namespace "${KV_TITLE}" (photo storage)`);
+const findKv = () =>
+  JSON.parse(wrangler(["kv", "namespace", "list"], { capture: true })).find(
+    (n) => n.title === KV_TITLE || n.title.endsWith(`-${KV_TITLE}`),
+  );
+let kv = findKv();
+if (!kv) {
+  const before = readFileSync(wranglerConfig, "utf8");
+  try {
+    wrangler(["kv", "namespace", "create", KV_TITLE], { env: { CI: "true" } });
+  } finally {
+    writeFileSync(wranglerConfig, before);
+  }
+  kv = findKv();
+}
+if (!kv?.id) throw new Error("Could not determine the photos KV namespace id");
+console.log(`  using KV namespace ${kv.id}`);
+
+writeDeployConfig(db.uuid, kv.id); // wrangler.jsonc keeps its local placeholder ids
 
 // 3. Secrets (generated once, reused on re-runs)
 const secrets = existsSync(secretsFile) ? JSON.parse(readFileSync(secretsFile, "utf8")) : {};

@@ -1,3 +1,4 @@
+import { imageStore } from "../lib/image-store";
 import type { AuctionList } from "@bike/contracts";
 import { ListSort, ListStatus, type AuctionCard } from "@bike/contracts";
 import { Hono } from "hono";
@@ -221,16 +222,16 @@ catalogueRoutes.get("/auctions/:id/details", async (c) => {
 catalogueRoutes.get("/images/*", async (c) => {
   const key = c.req.path.replace(/^\/api\/v1\/images\//, "");
   if (!IMAGE_KEY.test(key)) throw new AppError("NOT_FOUND", "Image not found");
-  const bucket = (c.env as { IMAGES?: R2Bucket }).IMAGES;
-  const obj = bucket ? await bucket.get(key) : null;
+  const store = imageStore(c.env);
+  const obj = store ? await store.get(key) : null;
   if (!obj) throw new AppError("NOT_FOUND", "Image not found");
   return new Response(obj.body, {
     headers: {
-      "content-type": obj.httpMetadata?.contentType ?? "application/octet-stream",
+      "content-type": obj.contentType,
       "cache-control": "public, max-age=31536000, immutable",
       "content-disposition": "inline",
       "x-content-type-options": "nosniff",
-      etag: obj.httpEtag,
+      etag: obj.etag,
     },
   });
 });

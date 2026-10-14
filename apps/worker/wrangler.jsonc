@@ -41,6 +41,9 @@
   // Bike images. If R2 is not enabled on the account, scripts/deploy.mjs deploys without this binding
   // and image upload answers 503 (listings show placeholders). See README → Deployment.
   "r2_buckets": [{ "binding": "IMAGES", "bucket_name": "bike-auction-images" }],
+  // Free-plan fallback for photos when R2 is not enabled (src/lib/image-store.ts). The deploy script
+  // creates the namespace and fills in its id; this placeholder id is only used locally.
+  "kv_namespaces": [{ "binding": "PHOTOS", "id": "00000000000000000000000000000000" }],
 
   // Metrics (BLUEPRINT §10). Workers Analytics Engine is available on the free plan and is not
   // billed; the dataset is created on first write. Optional at runtime: unbound → metrics no-op.

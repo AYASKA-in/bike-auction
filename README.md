@@ -11,7 +11,7 @@ server" with its own SQLite database. Concurrent bids therefore get one provable
 > `pnpm check` passes (563 tests); browser suites, an accessibility scan and a concurrency/load test pass locally.
 > On Cloudflare, a full auction was run end to end with real accounts: live updates over WebSockets, proxy
 > bidding, the hidden reserve, outbid alerts and the server-side close (details in
-> [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)). R2 (photos) is off; demo mode is off.
+> [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)). Photos use Workers KV (R2 is off); demo mode is off.
 
 |                                        |                                                                                 |
 | -------------------------------------- | ------------------------------------------------------------------------------- |
@@ -186,8 +186,8 @@ health. Full checklist, flags (`--demo`, `--with-r2`, `--test-turnstile`), smoke
 
   See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
-- **No real bike photos:** none are bundled (no licensed images), so listings show an original placeholder until an
-  admin uploads photos.
+- **Photos:** stored in R2 when it is enabled, otherwise in Workers KV (free plan, no payment method; about 1,000
+  uploads a day). No photos are bundled; listings show a placeholder until an admin uploads one.
 - **Missing account features:** no email provider (so no email verification or password reset), no payments, no KYC.
 - **Sessions:** they slide forward for 7 days; there is no absolute cap.
 - **Approximate limits:** some limits apply per Cloudflare location, so they're approximate. Other residual risks

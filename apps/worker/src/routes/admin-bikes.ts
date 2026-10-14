@@ -1,3 +1,4 @@
+import { imageStore, type ImageStore } from "../lib/image-store";
 import { BikeInput, BikePatch, bikeIssues, InspectionInput } from "@bike/contracts";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
@@ -67,12 +68,12 @@ export async function json<T>(c: Context<AppEnv>, schema: z.ZodType<T>): Promise
   return parsed.data;
 }
 
-/** Image storage is optional per deployment (R2 needs account approval); absent → 503, not a crash. */
-function images(c: Context<AppEnv>): R2Bucket {
-  const bucket = (c.env as { IMAGES?: R2Bucket }).IMAGES;
-  if (!bucket)
+/** Image storage is optional per deployment (R2, else KV); absent → 503, not a crash. */
+function images(c: Context<AppEnv>): ImageStore {
+  const store = imageStore(c.env);
+  if (!store)
     throw new AppError("SERVICE_UNAVAILABLE", "Image storage is not enabled on this deployment");
-  return bucket;
+  return store;
 }
 
 async function assertEditable(c: Context<AppEnv>, id: string) {
@@ -233,9 +234,9 @@ adminBikeRoutes.post("/bikes/:id/images", async (c) => {
   // Write object first, then metadata; if metadata fails, remove the object (no orphans).
   const key = imageKey(id, sniffed.ext);
   try {
-    await bucket.put(key, bytes, { httpMetadata: { contentType: sniffed.contentType } });
+    await bucket.put(key, bytes, sniffed.contentType);
   } catch (err) {
-    c.get("log").error("image.r2_put_failed", errorFields(err));
+    c.get("log").error("image.put_failed", { store: bucket.kind, ...errorFields(err) });
     throw new AppError(
       "SERVICE_UNAVAILABLE",
       "Image storage failed. Nothing was saved; try again.",
@@ -263,7 +264,7 @@ adminBikeRoutes.post("/bikes/:id/images", async (c) => {
   } catch (err) {
     c.get("log").error("image.d1_insert_failed", errorFields(err));
     await bucket
-      .delete(key)
+      .delete([key])
       .catch((e: unknown) =>
         c.get("log").error("image.orphan_cleanup_failed", { key, ...errorFields(e) }),
       );
@@ -319,9 +320,9 @@ adminBikeRoutes.delete("/bikes/:id/images/:imageId", async (c) => {
   // Metadata first: if R2 delete then fails, the object is unreachable (logged for cleanup), never a broken listing.
   await c.env.DB.prepare(`DELETE FROM bike_images WHERE id = ?`).bind(imageId).run();
   await images(c)
-    .delete(row.r2_key)
+    .delete([row.r2_key])
     .catch((e: unknown) =>
-      c.get("log").error("image.r2_delete_failed", { key: row.r2_key, ...errorFields(e) }),
+      c.get("log").error("image.delete_failed", { key: row.r2_key, ...errorFields(e) }),
     );
   await audit(c, "IMAGE_DELETED", "bike", id, { imageId });
   return c.json(await getBike(c.env.DB, id));

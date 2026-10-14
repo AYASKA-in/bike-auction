@@ -1,3 +1,4 @@
+import { imageStore } from "../lib/image-store";
 import {
   BikeInput,
   InspectionInput,
@@ -429,8 +430,8 @@ export async function resetDemoCatalogue(env: Env): Promise<{ auctions: number; 
       .prepare(`SELECT r2_key FROM bike_images WHERE bike_id IN (${inList(bikeIds.length)})`)
       .bind(...bikeIds)
       .all<{ r2_key: string }>();
-    if (env.IMAGES && imgs.results.length > 0)
-      await env.IMAGES.delete(imgs.results.map((r) => r.r2_key));
+    const store = imageStore(env);
+    if (store && imgs.results.length > 0) await store.delete(imgs.results.map((r) => r.r2_key));
     for (const table of ["bike_images", "bike_inspections"]) {
       stmts.push(
         db

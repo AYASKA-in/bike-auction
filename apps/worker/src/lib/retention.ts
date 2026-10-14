@@ -1,3 +1,4 @@
+import { imageStore } from "./image-store";
 import { createLogger, errorFields, type Logger } from "./logger";
 
 /**
@@ -157,17 +158,13 @@ async function sweepOrphanUploads(
   now: number,
   p: RetentionPeriods,
 ): Promise<number | "skipped"> {
-  const bucket = (env as { IMAGES?: R2Bucket }).IMAGES;
+  const bucket = imageStore(env);
   if (!bucket) return "skipped";
   const saved = await env.DB.prepare(`SELECT value FROM retention_state WHERE key = ?`)
     .bind(CURSOR_KEY)
     .first<{ value: string }>();
-  const page = await bucket.list({
-    prefix: "bikes/",
-    limit: ORPHAN_SCAN_PAGE,
-    ...(saved?.value ? { cursor: saved.value } : {}),
-  });
-  const old = page.objects.filter((o) => o.uploaded.getTime() < now - p.orphanUploads);
+  const page = await bucket.list("bikes/", ORPHAN_SCAN_PAGE, saved?.value || undefined);
+  const old = page.items.filter((o) => o.uploadedAt < now - p.orphanUploads);
   const known = new Set<string>();
   for (let i = 0; i < old.length; i += 90) {
     const keys = old.slice(i, i + 90).map((o) => o.key);
@@ -180,7 +177,7 @@ async function sweepOrphanUploads(
   }
   const orphans = old.map((o) => o.key).filter((k) => !known.has(k));
   if (orphans.length > 0) await bucket.delete(orphans);
-  const next = page.truncated ? page.cursor : null;
+  const next = page.cursor;
   await env.DB.prepare(
     next
       ? `INSERT INTO retention_state (key, value, updated_at) VALUES (?1, ?2, ?3)

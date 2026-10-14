@@ -18,7 +18,7 @@ real listing (2021 Royal Enfield Classic 350, hidden reserve ₹1,25,000):
   catalogue shows ENDED/SOLD, no negative countdown.
 
 Not yet observed on Cloudflare: the daily retention cron run (03:17 IST), Analytics Engine queries, photo
-upload (R2 is off), and load at scale (load tests were run locally only, by design).
+upload (R2 is off; KV fallback added after this run), and load at scale (load tests were run locally only, by design).
 
 Known limitation: the Turnstile check fails inside automated/embedded browsers (e.g. the Claude desktop
 browser pane); it passes in normal browsers.
@@ -49,26 +49,26 @@ dashboard (free) before the first deploy.
 
 ## Flags
 
-| Flag               | Effect                                                                                                                                                                                                          |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| _(none)_           | Refuses to deploy without real Turnstile keys (the test keys would let anyone pass the bot check)                                                                                                               |
-| `--test-turnstile` | **Short-lived verification deploy** with Cloudflare's always-pass test keys; runs the 20× register/login gate (checks password hashing within the free plan's CPU limit). Re-deploy with real keys right after. |
-| `--demo`           | Seeds the demo accounts and fictional catalogue and shows demo sign-in buttons. **Evaluation only:** the demo passwords are public.                                                                             |
-| `--with-r2`        | Creates and binds the private R2 bucket for photos. **Only after you approve R2** (Cloudflare may ask for a payment method). Without it, photo upload answers 503 and listings show placeholders.               |
-| `--skip-gate`      | Don't run the 20× auth gate                                                                                                                                                                                     |
+| Flag               | Effect                                                                                                                                                                                                                         |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| _(none)_           | Refuses to deploy without real Turnstile keys (the test keys would let anyone pass the bot check)                                                                                                                              |
+| `--test-turnstile` | **Short-lived verification deploy** with Cloudflare's always-pass test keys; runs the 20× register/login gate (checks password hashing within the free plan's CPU limit). Re-deploy with real keys right after.                |
+| `--demo`           | Seeds the demo accounts and fictional catalogue and shows demo sign-in buttons. **Evaluation only:** the demo passwords are public.                                                                                            |
+| `--with-r2`        | Creates and binds the private R2 bucket for photos. **Only after you approve R2** (Cloudflare may ask for a payment method). Without it, photos are stored in Workers KV (`bike-auction-photos`, free, created automatically). |
+| `--skip-gate`      | Don't run the 20× auth gate                                                                                                                                                                                                    |
 
 ## What the script does, and what each step needs
 
-| Step            | Details                                                                                                                                                                                                               | Verified               |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| D1 database     | `wrangler d1 create bike-auction` if missing; writes its id into `wrangler.jsonc`                                                                                                                                     | ⏳                     |
-| Build           | `pnpm build` (SPA + Worker bundle)                                                                                                                                                                                    | ✅                     |
-| Migrations      | `wrangler d1 migrations apply DB --remote` (0001–0006)                                                                                                                                                                | ✅ local · ⏳ remote   |
-| Durable Objects | `AuctionDO`, `PasswordHasherDO` (SQLite-backed, declared in `wrangler.jsonc` migrations)                                                                                                                              | ✅ local · ⏳ remote   |
-| Bindings        | `DB` (D1), `AUCTION`/`PASSWORD_HASHER` (DO), `ASSETS`, `AUTH_RATE_LIMIT`/`BID_RATE_LIMIT` (Rate Limiting), `METRICS` (Analytics Engine, optional, free), `IMAGES` (R2, only with `--with-r2`), daily cron (retention) | ✅ dry run · ⏳ remote |
-| Secrets         | Generated once and kept in `apps/worker/.deploy-secrets.json` (git-ignored): `BETTER_AUTH_SECRET`, `PSEUDONYM_SECRET`, `SEED_TOKEN`; plus your `TURNSTILE_SECRET_KEY`. Set with `wrangler secret bulk`.               | ⏳                     |
-| Vars            | `ENVIRONMENT=production`, `APP_VERSION=<git sha>`, `TURNSTILE_SITE_KEY`, `DEMO_MODE=false` (true only with `--demo`), retention periods                                                                               | ✅                     |
-| Health          | Waits until `/api/v1/status` reports the new version                                                                                                                                                                  | ⏳                     |
+| Step            | Details                                                                                                                                                                                                                                                                    | Verified               |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| D1 database     | `wrangler d1 create bike-auction` if missing; writes its id into `wrangler.jsonc`                                                                                                                                                                                          | ⏳                     |
+| Build           | `pnpm build` (SPA + Worker bundle)                                                                                                                                                                                                                                         | ✅                     |
+| Migrations      | `wrangler d1 migrations apply DB --remote` (0001–0006)                                                                                                                                                                                                                     | ✅ local · ⏳ remote   |
+| Durable Objects | `AuctionDO`, `PasswordHasherDO` (SQLite-backed, declared in `wrangler.jsonc` migrations)                                                                                                                                                                                   | ✅ local · ⏳ remote   |
+| Bindings        | `DB` (D1), `AUCTION`/`PASSWORD_HASHER` (DO), `ASSETS`, `AUTH_RATE_LIMIT`/`BID_RATE_LIMIT` (Rate Limiting), `METRICS` (Analytics Engine, optional, free), `PHOTOS` (Workers KV, photos), `IMAGES` (R2, only with `--with-r2`; preferred when bound), daily cron (retention) | ✅ dry run · ⏳ remote |
+| Secrets         | Generated once and kept in `apps/worker/.deploy-secrets.json` (git-ignored): `BETTER_AUTH_SECRET`, `PSEUDONYM_SECRET`, `SEED_TOKEN`; plus your `TURNSTILE_SECRET_KEY`. Set with `wrangler secret bulk`.                                                                    | ⏳                     |
+| Vars            | `ENVIRONMENT=production`, `APP_VERSION=<git sha>`, `TURNSTILE_SITE_KEY`, `DEMO_MODE=false` (true only with `--demo`), retention periods                                                                                                                                    | ✅                     |
+| Health          | Waits until `/api/v1/status` reports the new version                                                                                                                                                                                                                       | ⏳                     |
 
 Production safety built in:
 
