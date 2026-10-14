@@ -7,11 +7,11 @@ deadlines update instantly. Admins list bikes, run auctions, and watch the syste
 **Built on Cloudflare's free tier.** Each auction is run by its own Durable Object, a single-threaded "auction
 server" with its own SQLite database. Concurrent bids therefore get one provable order, without locks or races.
 
-> **Status (14 Oct 2026): deployed to Cloudflare (free plan) at https://bike-auction.skiranbot.workers.dev.**
-> `pnpm check` passes (563 tests); four browser suites, an accessibility scan and a concurrency/load test pass
-> against the local app. On Cloudflare, health/status (D1 reachable), security headers and the Turnstile widget
-> under the CSP were checked; the signed-in flows (bidding, live updates, close) still need the post-deploy smoke
-> test in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). R2 (photos) is off; demo mode is off.
+> **Status (14 Oct 2026): live on Cloudflare (free plan) at https://bike-auction.skiranbot.workers.dev.**
+> `pnpm check` passes (563 tests); browser suites, an accessibility scan and a concurrency/load test pass locally.
+> On Cloudflare, a full auction was run end to end with real accounts: live updates over WebSockets, proxy
+> bidding, the hidden reserve, outbid alerts and the server-side close (details in
+> [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)). R2 (photos) is off; demo mode is off.
 
 |                                        |                                                                                 |
 | -------------------------------------- | ------------------------------------------------------------------------------- |

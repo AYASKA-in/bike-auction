@@ -1,9 +1,27 @@
 # Deployment checklist (Cloudflare Workers, free plan)
 
 **Status: deployed 14 Oct 2026** to https://bike-auction.skiranbot.workers.dev (version `6e3355d`), free plan,
-no R2, demo mode off. Checked on Cloudflare: `/api/v1/status` reports the version with D1 `ok`; CSP, HSTS and
-`nosniff` headers present; the Turnstile widget renders under the CSP. Not yet checked on Cloudflare: the signed-in
-smoke test below (registration, bidding, live updates, close), WebSockets, alarms and the cron run.
+no R2, demo mode off.
+
+**Verified on Cloudflare (14 Oct 2026, 18:42–18:56 IST)** with three real accounts (admin + two buyers) and a
+real listing (2021 Royal Enfield Classic 350, hidden reserve ₹1,25,000):
+
+- `/api/v1/status` reports the version with D1 `ok`; CSP, HSTS and `nosniff` headers present.
+- Registration with Turnstile (consent recorded) in a normal browser; admin promotion via the D1 console.
+- Admin created a bike, an inspection and an auction; the Durable Object alarm started it on time and the
+  outbox projected it to the D1 catalogue.
+- WebSockets through the edge: an anonymous viewer and a buyer saw every bid live, with pseudonyms only.
+- Manual bid answered instantly by a rival's proxy maximum; outbid banner and "(Outbid!)" tab title shown.
+- Proxy vs proxy: ₹1,20,000 max exhausted, ₹1,30,000 max led at exactly the reserve (₹1,25,000);
+  "Reserve met" shown; no maximum visible to anyone else.
+- At the deadline the server closed it SOLD at ₹1,25,000; the winner sees "You won", My Bids → Won,
+  catalogue shows ENDED/SOLD, no negative countdown.
+
+Not yet observed on Cloudflare: the daily retention cron run (03:17 IST), Analytics Engine queries, photo
+upload (R2 is off), and load at scale (load tests were run locally only, by design).
+
+Known limitation: the Turnstile check fails inside automated/embedded browsers (e.g. the Claude desktop
+browser pane); it passes in normal browsers.
 
 Deploy notes learned on the first run: wrangler 4.149's `d1 create` offers to rewrite `wrangler.jsonc` (the script
 now restores it and builds the deploy config by parsing it), and Analytics Engine must be enabled once in the
