@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 // One-command deploy to Cloudflare Workers (free plan). Safe to re-run: every step is idempotent.
 //
-//   node scripts/deploy.mjs                       # first deploy (Turnstile TEST keys, for the auth gate)
-//   node scripts/deploy.mjs --turnstile-site-key 0x... --turnstile-secret-key 0x...   # real bot protection
+//   node scripts/deploy.mjs --turnstile-site-key 0x... --turnstile-secret-key 0x...   # normal deploy
+//   node scripts/deploy.mjs --test-turnstile      # SHORT-LIVED verification deploy with Cloudflare's
+//                                                 # always-pass TEST keys (runs the 20x auth gate); re-deploy
+//                                                 # with real keys right after. Never leave it running.
+//   node scripts/deploy.mjs --demo                # ALSO seed the fictional demo catalogue + demo accounts
+//                                                 # and show the demo-account buttons (evaluation only)
 //   node scripts/deploy.mjs --skip-gate           # don't run the 20x auth check afterwards
 //   node scripts/deploy.mjs --with-r2             # ALSO create/bind the R2 image bucket. Only after you have
 //                                                 # approved enabling R2 on the account (it may ask for billing).
@@ -100,9 +104,24 @@ const secrets = existsSync(secretsFile) ? JSON.parse(readFileSync(secretsFile, "
 secrets.BETTER_AUTH_SECRET ??= randomBytes(32).toString("base64url");
 secrets.SEED_TOKEN ??= randomBytes(24).toString("base64url");
 secrets.PSEUDONYM_SECRET ??= randomBytes(32).toString("base64url");
-const siteKey = flag("turnstile-site-key") ?? secrets.TURNSTILE_SITE_KEY ?? TEST_SITE_KEY;
-secrets.TURNSTILE_SECRET_KEY =
-  flag("turnstile-secret-key") ?? secrets.TURNSTILE_SECRET_KEY ?? TEST_SECRET_KEY;
+const wantTestKeys = has("test-turnstile");
+const realSite =
+  flag("turnstile-site-key") ??
+  (secrets.TURNSTILE_SITE_KEY !== TEST_SITE_KEY ? secrets.TURNSTILE_SITE_KEY : undefined);
+const realSecret =
+  flag("turnstile-secret-key") ??
+  (secrets.TURNSTILE_SECRET_KEY !== TEST_SECRET_KEY ? secrets.TURNSTILE_SECRET_KEY : undefined);
+if (!wantTestKeys && (!realSite || !realSecret)) {
+  console.error(
+    "\nReal Turnstile keys are required (the TEST keys let anyone pass the bot check).\n" +
+      "Create a free Turnstile widget for your workers.dev hostname in the Cloudflare dashboard, then run:\n" +
+      "  node scripts/deploy.mjs --turnstile-site-key <site key> --turnstile-secret-key <secret key>\n" +
+      "Or, for a short-lived verification deploy only: node scripts/deploy.mjs --test-turnstile",
+  );
+  process.exit(2);
+}
+const siteKey = wantTestKeys ? TEST_SITE_KEY : realSite;
+secrets.TURNSTILE_SECRET_KEY = wantTestKeys ? TEST_SECRET_KEY : realSecret;
 secrets.TURNSTILE_SITE_KEY = siteKey;
 writeFileSync(secretsFile, JSON.stringify(secrets, null, 2));
 const usingTestKeys = secrets.TURNSTILE_SECRET_KEY === TEST_SECRET_KEY;
@@ -121,7 +140,16 @@ try {
 
 step(`Deploying Worker (version ${version})`);
 const out = wrangler(
-  ["deploy", "--var", `APP_VERSION:${version}`, "--var", `TURNSTILE_SITE_KEY:${siteKey}`],
+  [
+    "deploy",
+    "--var",
+    `APP_VERSION:${version}`,
+    "--var",
+    `TURNSTILE_SITE_KEY:${siteKey}`,
+    // Demo-account buttons on the sign-in page only for an explicit evaluation deploy.
+    "--var",
+    `DEMO_MODE:${has("demo") ? "true" : "false"}`,
+  ],
   {
     capture: true,
   },
@@ -161,13 +189,17 @@ for (let i = 0; i < 30 && !healthy; i++) {
 }
 if (!healthy) throw new Error(`${url}/api/v1/status did not report version ${version}`);
 
-step("Seeding demo accounts");
-const seed = await fetch(`${url}/api/v1/internal/seed`, {
-  method: "POST",
-  headers: { authorization: `Bearer ${secrets.SEED_TOKEN}` },
-});
-console.log(" ", seed.status, await seed.text());
-if (!seed.ok) throw new Error("Seeding failed");
+// Demo accounts + fictional catalogue only for an explicit evaluation deploy (--demo). Their passwords
+// are public (README), so never seed them on a site real users rely on.
+if (has("demo")) {
+  step("Seeding demo accounts and the fictional demo catalogue");
+  const seed = await fetch(`${url}/api/v1/internal/seed`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${secrets.SEED_TOKEN}` },
+  });
+  console.log(" ", seed.status, (await seed.text()).slice(0, 300));
+  if (!seed.ok) throw new Error("Seeding failed");
+}
 
 if (!has("skip-gate")) {
   if (usingTestKeys) {

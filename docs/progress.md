@@ -74,7 +74,7 @@
 
 **Blocked on you**
 
-- Deployment: run `pnpm deploy` in your own terminal (wrangler cannot reach Cloudflare from my environments).
+- Deployment: run `node scripts/deploy.mjs` in your own terminal (wrangler cannot reach Cloudflare from my environments).
 - After the gate passes: create a Turnstile widget and re-run deploy with the real keys.
 
 ## Day 2 plan for Day 3 (kept for reference)
@@ -147,7 +147,7 @@ user, reconnection snapshot, resync, hibernation; authn/authz on bids and admin 
 "ADMIN allowed" now means "not 401/403" because parameterised admin routes exist; WS snapshot shape changed to
 `{view}`.
 
-**Still unverified:** real Cloudflare behaviour (you run `pnpm deploy`).
+**Still unverified:** real Cloudflare behaviour (you run `node scripts/deploy.mjs`).
 
 ## Day 5 (13 Oct 2026): catalogue and listing system, complete locally
 
@@ -209,7 +209,7 @@ restart) **passed**; Day-5 `journey.py` **passed**.
 - At the deadline the page only waited for the alarm's broadcast; it now also asks the server (resync), which
   resolves a due close.
 
-**Still unverified:** real Cloudflare (you run `pnpm deploy`).
+**Still unverified:** real Cloudflare (you run `node scripts/deploy.mjs`).
 
 ## Day 7 (13–14 Oct 2026): buyer experience and proxy bidding, complete locally
 
@@ -256,7 +256,36 @@ service; the Worker refuses to skip it outside development).
 
 **Still unverified:** everything on real Cloudflare (deploy, R2, Turnstile under CSP, cron, Analytics Engine).
 
-## Next: Day 9
+## Days 9–10 (14 Oct 2026): reliability, demo readiness and delivery
 
-Reliability and demo readiness: load and concurrency tests on a local or staging stack, fault injection (D1 outage,
-alarm storms), demo-data reset, frontend performance, production-readiness assessment.
+**Built:**
+
+- **Demo reset:** `pnpm --filter @bike/worker demo:reset` / `POST /internal/demo/reset`. It removes only
+  `created_by = 'seed'` data (cancels those auctions, deletes their listings, bikes and read models) and reseeds with
+  times relative to now. The demo now has "ending soon" (30 min) and "starting soon" (15 min) auctions. A Worker
+  test proves real listings and bids survive.
+- **Concurrency and latency harness** (`tests/load/concurrency.mjs`), with results in `docs/reliability.md`.
+- **Live Ops table:** the Retry action no longer overflows.
+- **Deploy hardening:**
+  - refuses Turnstile test keys unless `--test-turnstile`;
+  - `DEMO_MODE=false` and no demo accounts unless `--demo`;
+  - docs now say `node scripts/deploy.mjs` (in pnpm 10, `pnpm deploy` runs pnpm's built-in command instead).
+- **Docs:** final README, `docs/DEMO.md` (demo script and technical talking points), `docs/DEPLOYMENT.md`.
+
+**Measured (local):**
+
+- **Correctness under load:** all checks passed — 50 simultaneous equal bids gave exactly 1 accepted; 100 mixed bids
+  gave strictly increasing prices and no duplicates; equal maxima went to the earlier one; 8 maxima plus 10 manual
+  bids at once ended at second max + increment; duplicate keys gave one effect; no bid was accepted after the close;
+  the hard cap held.
+- **Latency:** sequential bid p50 50 ms / p95 64 ms; WebSocket delivery p50 40 ms / p95 48 ms; D1 projection p50
+  87 ms / p95 115 ms; catalogue p50 15 ms.
+
+**Bugs found and fixed:**
+
+- the deploy script defaulted to always-pass captcha keys;
+- demo accounts were seeded on every deploy;
+- the `pnpm deploy` instruction actually ran pnpm's built-in command;
+- the Retry button was clipped in the Live Ops table.
+
+**Still unverified:** everything on real Cloudflare (see `docs/DEPLOYMENT.md`).

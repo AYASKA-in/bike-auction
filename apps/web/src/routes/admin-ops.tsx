@@ -50,9 +50,12 @@ export function RetryProjectionButton({
   auctionId,
   onDone,
   compact = false,
+  short = false,
 }: {
   auctionId: string;
   onDone?: () => void;
+  /** Table rows: visible label "Retry" (screen readers still hear "Retry projection"). */
+  short?: boolean;
   compact?: boolean;
 }) {
   const retry = useMutation({
@@ -74,7 +77,15 @@ export function RetryProjectionButton({
         onClick={() => retry.mutate()}
         loading={retry.isPending}
       >
-        {retry.isPending ? "Retrying…" : "Retry projection"}
+        {retry.isPending ? (
+          "Retrying…"
+        ) : short ? (
+          <>
+            Retry<span className="sr-only"> projection</span>
+          </>
+        ) : (
+          "Retry projection"
+        )}
       </Button>
       <p className="min-h-4 text-xs text-steel" aria-live="polite">
         {retry.isSuccess &&
@@ -337,7 +348,12 @@ export function AdminOpsPage() {
                         {formatISTTime(r.closesAt)}
                       </td>
                       <td className={t.td}>
-                        <RetryProjectionButton auctionId={r.auctionId} onDone={refresh} compact />
+                        <RetryProjectionButton
+                          auctionId={r.auctionId}
+                          onDone={refresh}
+                          compact
+                          short
+                        />
                       </td>
                     </tr>
                   ))}

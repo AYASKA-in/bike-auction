@@ -1,0 +1,103 @@
+{
+  "base": "http://127.0.0.1:8800",
+  "startedAt": "2026-10-14T06:30:48.074Z",
+  "scenarios": {
+    "A": {
+      "requests": 50,
+      "accepted": 1,
+      "tooLow": 47,
+      "ledgerBids": 1
+    },
+    "B": {
+      "requests": 100,
+      "outcomes": {
+        "201": 7,
+        "BID_TOO_LOW": 91,
+        "ALREADY_LEADING": 2
+      },
+      "ledgerBids": 7
+    },
+    "C1": {
+      "statuses": [200, 200],
+      "finalPrice": 8000000
+    },
+    "C2": {
+      "requests": 18,
+      "outcomes": {
+        "200": 8,
+        "409": 10
+      },
+      "finalPrice": 6650000,
+      "ledgerBids": 15
+    },
+    "D": {
+      "auctions": 5,
+      "requests": 100,
+      "ledgerBidsPerAuction": [8, 7, 2, 5, 4]
+    },
+    "E": {
+      "requests": 10,
+      "ledgerBids": 1,
+      "responses201": 10,
+      "replayed": 9
+    },
+    "F": {
+      "requests": 80,
+      "accepted": 31,
+      "afterClose": 0,
+      "outcome": "SOLD"
+    },
+    "G": {
+      "roundsThatExtended": 6,
+      "extensionCount": 30,
+      "closesAtMinusOriginalMs": 51813,
+      "hardCapMs": 1800000
+    }
+  },
+  "latency": {
+    "bidRoundTripUnderBurstsMs": {
+      "n": 390,
+      "p50": 1209.2,
+      "p95": 2713.1,
+      "max": 2765.8
+    },
+    "bidRoundTripSequentialMs": {
+      "n": 30,
+      "p50": 58.7,
+      "p95": 77.4,
+      "max": 78.6
+    },
+    "wsDeliveryFromBidStartMs": {
+      "n": 30,
+      "p50": 46.5,
+      "p95": 65.3,
+      "max": 65.4
+    },
+    "d1ProjectionDelayMs": {
+      "n": 10,
+      "p50": 69.2,
+      "p95": 107.8,
+      "max": 107.8
+    },
+    "catalogueListMs": {
+      "n": 40,
+      "p50": 13.9,
+      "p95": 20.7,
+      "max": 23.5
+    },
+    "detailsMs": {
+      "n": 40,
+      "p50": 16.2,
+      "p95": 26.9,
+      "max": 28.5
+    },
+    "liveViewMs": {
+      "n": 40,
+      "p50": 26.3,
+      "p95": 37.1,
+      "max": 38.1
+    }
+  },
+  "failures": [],
+  "finishedAt": "2026-10-14T06:32:42.671Z"
+}

@@ -99,6 +99,20 @@ def bid(page, amount):
     page.get_by_role("button", name=re.compile("^Place bid")).click()
 
 
+def visible_after_paging(page, text, tries=15):
+    """My Bids is paginated (soonest-closing first); page through like a user would."""
+    expect(page.get_by_text("Your highest").first).to_be_visible(timeout=10000)  # first page loaded
+    for _ in range(tries):
+        if page.get_by_text(text).count() > 0:
+            break
+        more = page.get_by_role("button", name=re.compile("^Load more"))
+        if more.count() == 0:
+            break
+        more.first.click()
+        page.wait_for_timeout(600)
+    expect(page.get_by_text(text).first).to_be_visible(timeout=10000)
+
+
 def history_seqs(page):
     return [int(x) for x in page.locator("[data-testid=bid-history] li").evaluate_all("els => els.map(e => e.dataset.seq)")]
 
@@ -274,9 +288,9 @@ try:
         A.goto(f"{BASE}/me/watchlist")
         expect(A.get_by_text(f"Avenger {TAG}").first).to_be_visible(timeout=10000)
         A.goto(f"{BASE}/me/bids")
-        expect(A.get_by_text(f"Avenger {TAG}").first).to_be_visible(timeout=10000)
+        visible_after_paging(A, f"Avenger {TAG}")
         B.goto(f"{BASE}/me/bids?tab=outbid")
-        expect(B.get_by_text(f"Avenger {TAG}").first).to_be_visible(timeout=10000)
+        visible_after_paging(B, f"Avenger {TAG}")
         A.screenshot(path=f"{OUT}/my-bids-desktop.png", full_page=True)
         B.screenshot(path=f"{OUT}/my-bids-mobile-outbid.png", full_page=False)
         step("watchlist and My Bids (Leading for A, Outbid for B) reflect the live auction")

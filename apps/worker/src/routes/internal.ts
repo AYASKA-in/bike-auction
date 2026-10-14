@@ -4,7 +4,7 @@ import { recordSecurityEvent } from "../auth/security-events";
 import { timingSafeEqual } from "../lib/crypto";
 import { AppError } from "../lib/problem";
 import { DEMO_ACCOUNTS } from "../seed/demo-accounts";
-import { seedCatalogue } from "../seed/demo-catalogue";
+import { resetDemoCatalogue, seedCatalogue } from "../seed/demo-catalogue";
 import type { AppEnv } from "../types";
 
 /**
@@ -53,4 +53,25 @@ internalRoutes.post("/seed", async (c) => {
         });
   await recordSecurityEvent(c.env, { type: "admin.seed", requestId: c.get("requestId") });
   return c.json({ accounts: results, catalogue });
+});
+
+/**
+ * Demo reset (operator only). Removes ONLY data created by the demo seed (`created_by = 'seed'`):
+ * its auctions are cancelled in their Durable Objects (live viewers see "cancelled"), then their
+ * listings, read models, watchlist entries and bid read models, and the seed bikes, are deleted from
+ * D1. Real users, real listings and accounts are never touched; demo accounts are kept. Then the
+ * catalogue is seeded again with start/close times relative to NOW.
+ */
+internalRoutes.post("/demo/reset", async (c) => {
+  const removed = await resetDemoCatalogue(c.env);
+  const ids = await c.env.DB.prepare(`SELECT email, id FROM "user" WHERE email IN (?, ?)`)
+    .bind(DEMO_ACCOUNTS[1]!.email, DEMO_ACCOUNTS[2]!.email)
+    .all<{ email: string; id: string }>();
+  const byEmail = new Map(ids.results.map((r) => [r.email, r.id]));
+  const a = byEmail.get(DEMO_ACCOUNTS[1]!.email);
+  const b = byEmail.get(DEMO_ACCOUNTS[2]!.email);
+  if (!a || !b) throw new AppError("CONFLICT", "Run /internal/seed first (demo accounts missing)");
+  const catalogue = await seedCatalogue(c.env, { a, b });
+  await recordSecurityEvent(c.env, { type: "admin.seed", requestId: c.get("requestId") });
+  return c.json({ removed, catalogue });
 });

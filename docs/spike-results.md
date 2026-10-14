@@ -93,7 +93,7 @@ D1: 100k rows written/day, 5M read/day. Static asset requests are free and unlim
 | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------ |
 | Better Auth scrypt inside workerd: **80–110 ms per hash** (wall clock across the DO RPC, 5 samples) | **Measured locally**                                                                                     | matches the 91 ms native measurement |
 | Full register → sign-in → /me → sign-out cycle via `PasswordHasherDO`                               | **Passed locally** (`scripts/auth-gate.mjs`, 3 runs: sign-up p50 136 ms, sign-in p50 127 ms, 0 failures) | `wrangler dev`                       |
-| Same gate, 20 runs on the deployed Free plan                                                        | **PENDING** (you run `pnpm deploy`; my environments cannot reach api.cloudflare.com)                     |                                      |
+| Same gate, 20 runs on the deployed Free plan                                                        | **PENDING** (you run `node scripts/deploy.mjs`; my environments cannot reach api.cloudflare.com)         |                                      |
 | Better Auth migrations match what the library expects                                               | **Verified** by a drift test (`test/auth-schema.test.ts`)                                                |                                      |
 
 **Bug found: Better Auth instance initialised across requests.** A request that created an auth instance

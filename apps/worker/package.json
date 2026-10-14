@@ -11,7 +11,8 @@
     "cf-typegen": "wrangler types --strict-vars=false --env-file .dev.vars.example",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "spike:auth": "node scripts/spike-auth-cpu.mjs",
-    "seed:local": "node scripts/seed.mjs http://localhost:8787 local-seed-token-0123456789abcdef"
+    "seed:local": "node scripts/seed.mjs http://localhost:8787 local-seed-token-0123456789abcdef",
+    "demo:reset": "node scripts/seed.mjs http://localhost:8787 local-seed-token-0123456789abcdef --reset"
   },
   "dependencies": {
     "@bike/contracts": "workspace:*",

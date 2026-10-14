@@ -63,7 +63,7 @@ export const DEMO_CATALOGUE: Demo[] = [
     grade: "A",
     startRupees: 1_25_000,
     reserveRupees: 1_40_000,
-    plan: { kind: "live", closesInH: 2 },
+    plan: { kind: "live", closesInH: 0.5 }, // "ending soon" in a fresh demo
   },
   {
     bike: D({
@@ -150,7 +150,7 @@ export const DEMO_CATALOGUE: Demo[] = [
     damage: "Minor dent on the floorboard.",
     startRupees: 38_000,
     reserveRupees: 45_000,
-    plan: { kind: "upcoming", startsInH: 1 },
+    plan: { kind: "upcoming", startsInH: 0.25 }, // "starting soon"
   },
   {
     bike: D({
@@ -382,4 +382,70 @@ export async function seedCatalogue(
     auctions.push(auctionId);
   }
   return { bikes: created, auctions };
+}
+
+/**
+ * Removes everything the demo seed created (and nothing else): auctions listed by 'seed' are
+ * cancelled in their Durable Objects if still open, then their D1 rows and the seed bikes go.
+ * Bid ledgers inside the old auction objects remain (unreachable: no listing points at them).
+ */
+export async function resetDemoCatalogue(env: Env): Promise<{ auctions: number; bikes: number }> {
+  const db = env.DB;
+  const listings = await db
+    .prepare(`SELECT auction_id FROM auction_listings WHERE created_by = 'seed'`)
+    .all<{ auction_id: string }>();
+  const ids = listings.results.map((r) => r.auction_id);
+  for (const id of ids) {
+    try {
+      const stub = env.AUCTION.get(env.AUCTION.idFromName(id));
+      await stub.cancel("Demo data reset");
+    } catch {
+      // already ended/cancelled or never created: nothing to cancel
+    }
+  }
+  const bikes = await db
+    .prepare(`SELECT id FROM bikes WHERE created_by = 'seed'`)
+    .all<{ id: string }>();
+  const bikeIds = bikes.results.map((r) => r.id);
+  const inList = (n: number) => Array.from({ length: n }, () => "?").join(",");
+  const stmts: D1PreparedStatement[] = [];
+  if (ids.length > 0) {
+    for (const table of ["watchlist", "user_bids_rm", "auction_bids_rm"]) {
+      stmts.push(
+        db.prepare(`DELETE FROM ${table} WHERE auction_id IN (${inList(ids.length)})`).bind(...ids),
+      );
+    }
+    stmts.push(
+      db
+        .prepare(`DELETE FROM auction_listings WHERE auction_id IN (${inList(ids.length)})`)
+        .bind(...ids),
+    );
+    stmts.push(
+      db.prepare(`DELETE FROM auctions_rm WHERE id IN (${inList(ids.length)})`).bind(...ids),
+    );
+  }
+  if (bikeIds.length > 0) {
+    const imgs = await db
+      .prepare(`SELECT r2_key FROM bike_images WHERE bike_id IN (${inList(bikeIds.length)})`)
+      .bind(...bikeIds)
+      .all<{ r2_key: string }>();
+    if (env.IMAGES && imgs.results.length > 0)
+      await env.IMAGES.delete(imgs.results.map((r) => r.r2_key));
+    for (const table of ["bike_images", "bike_inspections"]) {
+      stmts.push(
+        db
+          .prepare(`DELETE FROM ${table} WHERE bike_id IN (${inList(bikeIds.length)})`)
+          .bind(...bikeIds),
+      );
+    }
+    stmts.push(
+      db
+        .prepare(
+          `DELETE FROM bikes WHERE id IN (${inList(bikeIds.length)}) AND created_by = 'seed'`,
+        )
+        .bind(...bikeIds),
+    );
+  }
+  if (stmts.length > 0) await db.batch(stmts);
+  return { auctions: ids.length, bikes: bikeIds.length };
 }

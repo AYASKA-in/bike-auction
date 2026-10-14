@@ -1,139 +1,208 @@
 # Bike Auction Platform
 
-Real-time auctions for used and repossessed two-wheelers. Each auction is run by one authoritative
-Cloudflare Durable Object, so concurrent bids get a single, provable order. Built on free Cloudflare
-infrastructure. Design: [`BLUEPRINT.md`](BLUEPRINT.md) · Status: [`docs/progress.md`](docs/progress.md).
+Real-time online auctions for inspected used and bank-repossessed two-wheelers in India. Buyers browse inspected
+bikes, bid live against each other (by hand or with an automatic maximum), and see prices, outbid notices and
+deadlines update instantly. Admins list bikes, run auctions, and watch the system's health.
 
-> **Status: Day 8 of 10.** Auctions with manual and automatic (proxy) bidding, a live auction page that survives
-> disconnects and restarts, My Bids, Watchlist, a full admin desk with live operations and audit trail, structured
-> logs and metrics, strict security headers and rate limits, consent, data export and account deletion, light/dark
-> themes. Verified locally (`pnpm check`: 562 tests; four browser suites; axe scan). API:
-> [`docs/api.md`](docs/api.md) · Runbook: [`docs/runbook.md`](docs/runbook.md) · Threat model:
-> [`docs/threat-model.md`](docs/threat-model.md) · Privacy: [`docs/privacy.md`](docs/privacy.md) · Screenshots:
-> [`docs/screenshots/day8`](docs/screenshots/day8). **Not yet verified on real Cloudflare** (deploy pending your
-> approval).
+**Built on Cloudflare's free tier.** Each auction is run by its own Durable Object, a single-threaded "auction
+server" with its own SQLite database. Concurrent bids therefore get one provable order, without locks or races.
 
-## Demo accounts
+> **Status (14 Oct 2026): complete and demo-ready locally.** `pnpm check` passes (563 tests). Four browser suites, an
+> accessibility scan and a concurrency/load test pass against the real local app. **Not yet deployed to Cloudflare**:
+> that needs the owner's Cloudflare login (see [Deployment](#deployment)). Locally verified ≠ production verified.
 
-Created by the seed step (demo-only passwords, used nowhere else):
+|                                        |                                                                                 |
+| -------------------------------------- | ------------------------------------------------------------------------------- |
+| Demo guide and 3-minute script         | [`docs/DEMO.md`](docs/DEMO.md)                                                  |
+| Architecture                           | [`docs/architecture.md`](docs/architecture.md) · ADRs in [`docs/adr`](docs/adr) |
+| API and WebSocket protocol             | [`docs/api.md`](docs/api.md)                                                    |
+| Database                               | [`docs/database.md`](docs/database.md)                                          |
+| Reliability and performance (measured) | [`docs/reliability.md`](docs/reliability.md)                                    |
+| Security and threat model              | [`docs/threat-model.md`](docs/threat-model.md)                                  |
+| Privacy and retention (India DPDP)     | [`docs/privacy.md`](docs/privacy.md)                                            |
+| Operations runbook                     | [`docs/runbook.md`](docs/runbook.md)                                            |
+| Deployment checklist                   | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)                                      |
+| Progress log and decisions             | [`docs/progress.md`](docs/progress.md) · [`BLUEPRINT.md`](BLUEPRINT.md)         |
+| Screenshots                            | [`docs/screenshots/day8`](docs/screenshots/day8)                                |
 
-| Role    | Email                    | Password          |
-| ------- | ------------------------ | ----------------- |
-| Admin   | admin@bikeauction.demo   | Demo-Admin-2026!  |
-| Buyer A | buyer.a@bikeauction.demo | Demo-BuyerA-2026! |
-| Buyer B | buyer.b@bikeauction.demo | Demo-BuyerB-2026! |
+## Features
 
-## Stack
+**Buyers**
 
-React 19 · Vite 8 · Tailwind CSS 4 · TanStack Router/Query · Hono on Cloudflare Workers · Durable Objects
-(SQLite, RPC, alarms, WebSocket hibernation) · D1 · R2 · Zod · Vitest + `@cloudflare/vitest-plugin` · fast-check · pnpm.
+- **Catalogue:**
+  - search, make/city/year/engine-size/price filters with removable chips;
+  - sorting by ending soon, starting soon, price, newest and recently ended;
+  - inspection grade, RTO/RC/loan (NOC) transparency, and a repossessed flag.
+- **Live auction page:**
+  - price, minimum next bid, bid count and leader pseudonym, with a countdown in IST;
+  - quick-bid buttons that follow the real increment ladder;
+  - live bid history;
+  - a connection indicator, with stale numbers marked and bidding paused while offline.
+- **Proxy (automatic) bidding:** set a hidden maximum and the server bids for you, eBay-style.
+  - Equal maximums: the earlier one wins.
+  - Nobody else ever sees your maximum.
+- **Outbid alerts:** outbid banner with one-tap rebid, tab-title flash and vibration.
+  - **Anti-sniping:** a late bid extends the deadline by 2 minutes, capped at 30 minutes in total.
+  - **Results:** confirmed by the server, never by the browser's clock.
+- **My Bids** (Leading / Outbid / Won / Lost) and **Watchlist**.
+- **Account:** consent recorded at sign-up, data export, and account deletion. Deletion keeps auction history intact.
+- **Interface:** light, dark and system themes, mobile-first layouts, WCAG 2.x AA (axe-checked).
 
-## Layout
+**Admins**
+
+- Bikes with full Indian paperwork fields, versioned inspection reports, photos (EXIF stripped, private storage).
+- Auctions created as drafts, then scheduled; hidden reserve and anti-sniping toggle; no duplicate open auction per bike.
+- **Auction desk** with status counts, plus cancel with a reason.
+- **Live operations:** health, viewers, sync lag, backlog and warnings.
+- **Per-auction view:** bid ledger, timers and recovery actions.
+- **Audit trail** with filters.
+
+**Engineering**
+
+- **Atomic bids:** one SQLite transaction per command, with durable idempotency keys so a retry never bids twice.
+- **Read-model sync:** events are written to an outbox in the same transaction, then copied to D1 read models with
+  retry and backoff.
+- **Live updates:** hibernatable WebSockets that recover from gaps and restarts.
+- **Security:** CSP and security headers, CSRF origin checks, layered rate limits, Turnstile, per-account login
+  backoff.
+- **Observability:** structured logs with secrets and PII redacted; metrics in Analytics Engine.
+- **Tests:** property-based tests of the auction rules; browser tests with two real buyers, a server restart and
+  going offline.
+
+## Architecture in one picture
 
 ```
-apps/web          React SPA (served as Workers static assets, same origin as the API)
-apps/worker       Hono API, AuctionDO, PasswordHasherDO, D1 migrations, Worker tests
-packages/domain   Pure auction engine: lifecycle, bids, reserve, soft close, idempotency, pseudonyms (ADR 004)
-packages/contracts Zod schemas shared by API, WebSocket protocol and UI
-docs/             architecture, ADRs, spike results, assumptions, progress
+ Browser (React SPA) ── HTTPS commands ──▶ Cloudflare Worker (Hono API, auth, rate limits, CSP)
+        ▲                                         │ RPC (one object per auction)
+        │ WebSocket events                        ▼
+        └──────────────────────────────── AuctionDO  ◀── the authority for ONE auction
+                                           SQLite: state · bid ledger · proxy maxima · idempotency · outbox
+                                           single-threaded → bids are processed one at a time, in order
+                                                  │ outbox (same transaction) → retried projection
+                                                  ▼
+                                   D1 (SQLite): catalogue, read models, accounts, audit · R2: photos
 ```
 
-## Prerequisites
+- **Why one Durable Object per auction?** Cloudflare runs each object single-threaded, in one place, with its own
+  storage. Every bid for an auction goes to the same object, which checks the rules and commits state, ledger row,
+  idempotency record and outbox event in **one synchronous SQLite transaction**. Two bids can never interleave, so
+  there are no lost updates and no double winners, and no locks are needed. Different auctions scale independently.
+- **Commands over HTTP, events over WebSocket.** A bid is an idempotent `POST`; its effect is broadcast with a
+  contiguous sequence number. Clients detect gaps and resync, and an old HTTP response can never overwrite newer
+  live state.
+- **D1 is a read model, never the authority.** The catalogue, My Bids and the admin desk read D1. If D1 is down,
+  bidding continues and the outbox catches up later.
+- More detail: [`docs/architecture.md`](docs/architecture.md). The demo guide has interview-style explanations.
 
-Node 22+, pnpm 10 (`corepack enable`). No Cloudflare account is needed for local work.
+## Run it locally
 
-## Local development
+Prerequisites: **Node 22+**, **pnpm 10** (`corepack enable`), Python 3 for the browser tests. No Cloudflare
+account is needed.
 
 ```bash
 pnpm install
-pnpm dev            # builds the SPA, applies local D1 migrations, runs the Worker on http://localhost:8787
-pnpm --filter @bike/worker seed:local   # in a second terminal: demo accounts + 8 demo bikes/auctions
-# for frontend hot-reload, in a second terminal:
-pnpm dev:web        # http://localhost:5173, proxies /api (incl. WebSockets) to :8787
+pnpm dev                                  # builds the SPA, applies local D1 migrations, serves http://localhost:8787
+pnpm --filter @bike/worker seed:local     # (2nd terminal) demo accounts + 8 fictional bikes/auctions
+pnpm --filter @bike/worker demo:reset     # any time later: fresh demo auctions with times relative to NOW
 ```
 
-Try: `curl http://localhost:8787/api/v1/health` and `curl http://localhost:8787/api/v1/status`.
+Open http://localhost:8787. Demo sign-in buttons appear on the sign-in page in local demo mode; the accounts are
+listed in [`docs/DEMO.md`](docs/DEMO.md). Frontend hot reload: `pnpm dev:web` (http://localhost:5173, proxies
+`/api` and WebSockets to :8787).
 
-## Checks
+Secrets for local work are generated into `apps/worker/.dev.vars` (git-ignored) from `.dev.vars.example`.
+
+## Testing
 
 ```bash
-pnpm check          # format, lint, typecheck, build, all tests
-pnpm test           # unit, property-based and Worker integration tests (inside workerd)
-pnpm --filter @bike/domain test:coverage   # domain coverage report (90% thresholds)
-FC_SEED=42 FC_RUNS=3000 pnpm --filter @bike/domain test   # longer property-test run
-pnpm --filter @bike/worker spike:auth   # optional: password-hashing latency spike against wrangler dev
+pnpm check     # format → lint → typecheck → all tests → production build + deploy dry run (≈ 5–6 min)
+pnpm test      # contracts, domain (incl. fast-check properties), web, Worker integration tests in workerd
 ```
 
-### End-to-end journey (real local app, Playwright)
+Browser and load tests (Playwright for Python: `pip install playwright axe-playwright-python pillow`):
 
-```bash
-pip install playwright pillow    # browser: a local Chromium
-python3 tests/e2e/journey.py http://127.0.0.1:8787 /tmp/e2e   # needs a seeded local `wrangler dev`
-```
+| Script                                                  | What it proves                                                                                                                                                                    | Server         |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| `python3 tests/e2e/journey.py http://127.0.0.1:8787`    | Admin lists a bike (photo EXIF stripped), creates and schedules an auction, buyer finds it and bids                                                                               | running app    |
+| `python3 tests/e2e/live.py`                             | Two buyers and an admin: live updates, outbid notice, anti-sniping, offline → recovery, **server killed and restarted**, simultaneous bids, close, proxy bids, My Bids, Watchlist | starts its own |
+| `python3 tests/e2e/journeys.py`                         | Buyer (register with consent → bid → proxy → win → export), privacy (consent refused, export, delete, history intact), admin ops/ledger/audit; light, dark and mobile             | starts its own |
+| `python3 tests/e2e/a11y.py http://127.0.0.1:8787`       | axe WCAG 2.x A/AA on every main page, desktop and mobile, visitor/buyer/admin. Fails on serious or critical                                                                       | running app    |
+| `node tests/load/concurrency.mjs http://127.0.0.1:8787` | 20 buyers; 50 and 100 simultaneous bids; proxy and manual together; 5 auctions; duplicates; deadline race; hard cap; latency                                                      | running app    |
 
-Admin signs in → creates a bike → records an inspection → uploads a photo with GPS EXIF (checks the stored
-copy has none and is ≤2000 px) → creates a draft auction → schedules it → buyer finds it via search → opens the
-detail page (reserve not leaked) → bids → mobile filters. Screenshots go to the output folder.
-
-### Multi-user live test (two buyers + admin, real server restart)
-
-```bash
-python3 tests/e2e/live.py 8799 /tmp/e2e-live   # starts/stops its own `wrangler dev` on that port
-```
-
-Buyer A (desktop) and Buyer B (mobile) bid against each other while the admin watches: live price,
-outbid notice to the right user, anti-sniping deadline seen by all, refresh, offline → recovery, a killed and
-restarted server → automatic recovery, no duplicate bids, simultaneous bids, server-confirmed close, expired session.
-
-### All browser suites (Playwright for Python; `pip install playwright axe-playwright-python`)
-
-| Script                  | What it proves                                                                                                                                         | How                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- |
-| `tests/e2e/journey.py`  | Admin lists a bike (photo EXIF stripped) → auction → buyer bids                                                                                        | needs a running local app |
-| `tests/e2e/live.py`     | Two buyers + admin: live updates, outbid, offline, **server restart**, simultaneous bids, close, proxy bids                                            | starts its own server     |
-| `tests/e2e/journeys.py` | Buyer (register with consent → … → win → export), privacy (consent refused, export, delete, history intact), admin ops/ledger/audit, light/dark/mobile | starts its own server     |
-| `tests/e2e/a11y.py`     | axe-core WCAG 2.x A/AA on every main page, desktop + mobile, anon/buyer/admin: fails on serious/critical                                               | needs a running local app |
-
-For a running app use `npx wrangler dev --var TURNSTILE_SECRET_KEY:` from `apps/worker` when Cloudflare's captcha
-service isn't reachable (this sandbox): with `ENVIRONMENT=development` the Worker then skips captcha; anywhere else it
-refuses to start without the secret. The self-starting scripts do this automatically (`E2E_TURNSTILE=1` keeps it on).
-
-### Demo catalogue
-
-Seeding adds 8 fictional, clearly labelled Indian listings (Classic 350, Activa 6G, Pulsar NS200 repossessed
-with an active loan, Jupiter, Splendor Plus, Apache RTR 160 4V, Access 125, FZ-S): 3 live with real bids,
-2 upcoming, 2 ending right after seeding (one sold, one reserve not met), 1 draft. Idempotent per listing.
-No photos are bundled (no authorised images); cards show an original placeholder until an admin uploads one.
-
-## Environment
-
-Non-secret config lives in `apps/worker/wrangler.jsonc` (`vars`). Secrets go in `apps/worker/.dev.vars`
-locally (see `.dev.vars.example`) and `wrangler secret put` in production. Never commit `.dev.vars`.
-After changing bindings, run `pnpm --filter @bike/worker cf-typegen`.
+The scripts that use a "running app" need it started with the captcha check disabled:
+`cd apps/worker && npx wrangler dev --var TURNSTILE_SECRET_KEY:`. That's because the browsers these scripts drive
+can't solve a captcha, and the test sandbox can't reach Cloudflare's captcha service at all. The Worker skips the
+captcha only when `ENVIRONMENT=development`, and anywhere else it refuses to start without the secret. The
+self-starting scripts do this automatically.
 
 ## Deployment
 
-Run this in your own terminal (Windows PowerShell, macOS or Linux), from the repo root:
+One command, run in **your own terminal** (it opens a browser for `wrangler login`; logging in on the Cloudflare
+website alone does not authenticate Wrangler):
 
 ```bash
-corepack enable          # or: npm i -g pnpm
-pnpm install
-pnpm deploy              # opens the browser for `wrangler login` the first time
+node scripts/deploy.mjs --turnstile-site-key <site key> --turnstile-secret-key <secret key>
 ```
 
-`scripts/deploy.mjs` is idempotent. It creates the D1 database (and writes its id into `wrangler.jsonc`),
-builds, applies migrations, deploys, sets generated secrets (kept in `apps/worker/.deploy-secrets.json`,
-git-ignored), seeds the demo accounts, waits for the new version, and runs the 20× auth gate.
+It creates the D1 database, builds, migrates, deploys, sets generated secrets (kept git-ignored), and checks
+health. Full checklist, flags (`--demo`, `--with-r2`, `--test-turnstile`), smoke test and rollback:
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Nothing here enables paid services. R2 (photos) stays off unless you pass
+`--with-r2`.
 
-The first deploy uses Cloudflare's **Turnstile test keys** so the gate can run. Afterwards, create a free
-Turnstile widget for your `*.workers.dev` hostname (dashboard → Turnstile) and run:
+## Security highlights
 
-```bash
-pnpm deploy --turnstile-site-key <site key> --turnstile-secret-key <secret key>
+- **Bid integrity:**
+  - Authoritative per-auction state with atomic commits.
+  - Mandatory idempotency keys.
+  - The server's clock is the only clock: the browser never decides a bid's timing or an auction's end.
+- **Privacy:**
+  - Pseudonymous bidders: other buyers never see identities.
+  - Hidden reserves and maximums: never in events, history, D1, logs or other users' responses.
+- **Authentication:**
+  - Better Auth sessions in HttpOnly cookies.
+  - Password hashing (scrypt) in a dedicated Durable Object, to stay within the free-plan CPU limit.
+  - Turnstile on sign-up and sign-in, plus per-account login backoff.
+- **Browser and HTTP protections:**
+  - Strict CSP with no inline scripts; HSTS, COOP and CORP headers.
+  - CSRF origin checks; WebSocket origin checks.
+- **Rate limits:** layered, at the edge, per auction and per admin.
+- **Data protection:**
+  - Consent recorded with the notice version.
+  - Export and deletion of your own data.
+  - Daily retention cleanup.
+  - Threat model and privacy documents, which separate implemented safeguards from legal review still needed.
+
+## Known limitations
+
+- **Not verified on real Cloudflare yet:**
+  - the deployment itself;
+  - password-hashing CPU time on the free plan;
+  - Turnstile under the CSP;
+  - real R2;
+  - the cron cleanup;
+  - Analytics Engine.
+
+  See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
+- **No real bike photos:** none are bundled (no licensed images), so listings show an original placeholder until an
+  admin uploads photos.
+- **Missing account features:** no email provider (so no email verification or password reset), no payments, no KYC.
+- **Sessions:** they slide forward for 7 days; there is no absolute cap.
+- **Approximate limits:** some limits apply per Cloudflare location, so they're approximate. Other residual risks
+  are in [`docs/threat-model.md`](docs/threat-model.md) § 6.
+- **Performance numbers are local measurements** ([`docs/reliability.md`](docs/reliability.md)), not production.
+
+## Repository layout
+
+```
+apps/web            React SPA (Workers static assets, same origin as the API)
+apps/worker         Hono API, AuctionDO, PasswordHasherDO, D1 migrations, Worker tests, seed/demo scripts
+packages/domain     Pure auction engine: lifecycle, ladder, reserve, soft close, proxy bidding, idempotency
+packages/contracts  Zod schemas shared by API, WebSocket protocol and UI
+tests/e2e           Playwright journeys and accessibility scan · tests/load: concurrency + latency
+docs/               Architecture, ADRs, API, database, security, privacy, runbook, reliability, demo, deployment
 ```
 
-Rollback: `npx wrangler rollback` (in `apps/worker`).
-
-**Photos / R2:** by default the deploy runs **without** the R2 binding (no R2 activation, no billing): photo
-uploads return 503 and listings show placeholders. After you approve R2 storage, run `pnpm deploy --with-r2`
-(creates the private `bike-auction-images` bucket and binds it). Locally, Wrangler's R2 emulation is used.
+Stack: React 19 · Vite 8 · Tailwind CSS 4 · TanStack Router/Query · Hono · Cloudflare Workers, Durable Objects
+(SQLite, alarms, hibernatable WebSockets), D1, R2, Rate Limiting, Analytics Engine · Better Auth · Zod · Vitest +
+`@cloudflare/vitest-plugin` · fast-check · Playwright · pnpm.

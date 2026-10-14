@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { AuctionDetails, AuctionList, ProblemDetails, PublicBike } from "@bike/contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -534,4 +534,80 @@ describe("admin overview KPIs", () => {
     expect(body.bikes).toBeGreaterThanOrEqual(1);
     expect(body.auctionsByStatus.find((r) => r.status === "DRAFT")?.n).toBeGreaterThanOrEqual(1);
   });
+});
+
+describe("demo reset (operator)", () => {
+  const op = (path: string) =>
+    exports.default.fetch(`http://example.com/api/v1/internal${path}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.SEED_TOKEN}` },
+    });
+
+  it("removes only seed data, keeps real listings and bids, and reseeds with fresh times", async () => {
+    expect((await op("/seed")).status).toBe(200);
+    // A real (non-demo) listing with a real bid must survive the reset.
+    const { admin, buyer } = await adminAndBuyer();
+    const bikeId = await inspectedBike(admin, { make: "Kawasaki", model: "Ninja 300" });
+    const created = (await (
+      await createAuctionFor(admin, bikeId, { schedule: true, reserveMinor: null })
+    ).json()) as { view: { auctionId: string } };
+    const realId = created.view.auctionId;
+    const bidRes = await exports.default.fetch(
+      `http://example.com/api/v1/auctions/${realId}/bids`,
+      {
+        method: "POST",
+        headers: {
+          origin: "http://example.com",
+          cookie: buyer,
+          "content-type": "application/json",
+          "idempotency-key": `k-${crypto.randomUUID()}`,
+        },
+        body: JSON.stringify({ amountMinor: 5_000_000 }),
+      },
+    );
+    expect(bidRes.status).toBe(201);
+
+    const before = await env.DB.prepare(
+      `SELECT auction_id FROM auction_listings WHERE created_by = 'seed'`,
+    ).all<{ auction_id: string }>();
+    expect(before.results.length).toBeGreaterThan(0);
+
+    const res = await op("/demo/reset");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      removed: { auctions: number };
+      catalogue: { bikes: number };
+    };
+    expect(body.removed.auctions).toBe(before.results.length);
+    expect(body.catalogue.bikes).toBe(8);
+
+    const oldIds = before.results.map((r) => r.auction_id);
+    const leftovers = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM auctions_rm WHERE id IN (${oldIds.map(() => "?").join(",")})`,
+    )
+      .bind(...oldIds)
+      .first<{ n: number }>();
+    expect(leftovers?.n).toBe(0);
+    // The real auction, its listing and its bid are untouched.
+    expect(
+      (
+        await env.DB.prepare(`SELECT COUNT(*) AS n FROM auction_listings WHERE auction_id = ?`)
+          .bind(realId)
+          .first<{ n: number }>()
+      )?.n,
+    ).toBe(1);
+    const realView = (await (await call("GET", `/auctions/${realId}`)).json()) as {
+      status: string;
+      bidCount: number;
+    };
+    expect(realView).toMatchObject({ status: "LIVE", bidCount: 1 });
+    // Fresh demo auctions are live / upcoming relative to now (not expired).
+    const live = AuctionList.parse(await (await call("GET", "/auctions?status=LIVE")).json());
+    expect(live.items.filter((i) => i.closesAt > Date.now()).length).toBeGreaterThanOrEqual(3);
+    // Unauthenticated callers can't reset.
+    const anon = await exports.default.fetch("http://example.com/api/v1/internal/demo/reset", {
+      method: "POST",
+    });
+    expect(anon.status).toBe(401);
+  }, 60_000);
 });
