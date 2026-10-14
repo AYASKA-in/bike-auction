@@ -53,9 +53,24 @@ describe("durability: a pending outbox always has a scheduled retry", () => {
       state.storage.sql.exec(`DELETE FROM timers WHERE kind = 'outbox'`);
     });
     await evictDurableObject(stub);
+    // Inspect the restarted object from inside its first turn (the constructor's recovery has run,
+    // the recovered alarm has not), then cancel the alarm so nothing fires during teardown: an alarm
+    // racing evictDurableObject/teardown intermittently froze the vitest-pool-workers runtime.
     const fresh = auctionStub(id);
-    expect((await fresh.ops()).pendingOutbox).toBeGreaterThan(0);
-    const { timers } = await fresh.ops();
-    expect(timers.map((t) => t.kind)).toContain("outbox");
+    const seen = await runInDurableObject(fresh, async (_i: AuctionDO, state) => {
+      const kinds = state.storage.sql
+        .exec<{ kind: string }>(`SELECT kind FROM timers`)
+        .toArray()
+        .map((t) => t.kind);
+      const pending = state.storage.sql
+        .exec<{ n: number }>(`SELECT COUNT(*) AS n FROM events WHERE projected_at IS NULL`)
+        .one().n;
+      const alarm = await state.storage.getAlarm();
+      await state.storage.deleteAlarm();
+      return { kinds, pending, alarm };
+    });
+    expect(seen.pending).toBeGreaterThan(0);
+    expect(seen.kinds).toContain("outbox");
+    expect(seen.alarm).not.toBeNull();
   });
 });

@@ -87,6 +87,23 @@ const MIGRATIONS: readonly string[] = [
   CREATE TABLE bid_attempts (user_id TEXT NOT NULL, at INTEGER NOT NULL);
   CREATE INDEX idx_bid_attempts ON bid_attempts (user_id, at);
   `,
+  // v4 (Day 7): proxy / automatic bidding. Hidden maxima live ONLY here (never in state_json,
+  // events, the D1 projection or logs). set_seq orders equal maxima (earlier wins). Existing ledger
+  // rows were all placed by hand, hence the MANUAL default.
+  `
+  CREATE TABLE proxy_bids (
+    user_id    TEXT PRIMARY KEY,
+    max_minor  INTEGER NOT NULL CHECK (max_minor > 0),
+    set_seq    INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  ALTER TABLE bids ADD COLUMN kind TEXT NOT NULL DEFAULT 'MANUAL' CHECK (kind IN ('MANUAL', 'PROXY'));
+  `,
+  // v5 (Day 8): accounts closed by their owner. A retired user can't place bids or maxima here any
+  // more (checked inside the critical section), so a deletion can't race a new command.
+  `
+  CREATE TABLE retired_users (user_id TEXT PRIMARY KEY, retired_at INTEGER NOT NULL);
+  `,
 ];
 
 export const AUCTION_SCHEMA_VERSION = MIGRATIONS.length;

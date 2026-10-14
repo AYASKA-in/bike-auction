@@ -10,7 +10,7 @@ describe("system endpoints", () => {
     expect(res.status).toBe(200);
     expect(HealthResponse.parse(await res.json()).status).toBe("ok");
     expect(res.headers.get("x-request-id")).toMatch(/^req_[a-f0-9]{32}$/);
-    expect(res.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(res.headers.get("content-security-policy")).toContain("default-src 'none'");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("cache-control")).toBe("no-store");
   });

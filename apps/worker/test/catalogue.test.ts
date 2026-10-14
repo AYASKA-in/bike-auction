@@ -512,6 +512,11 @@ describe("demo catalogue seeding", () => {
       await (await call("GET", "/auctions?status=ENDED&q=Access")).json(),
     );
     expect(ended.items[0]).toMatchObject({ status: "ENDED", outcome: "SOLD" });
+    // Ended auctions default to "recently ended" (closing time, newest first).
+    const all = AuctionList.parse(await (await call("GET", "/auctions?status=ENDED")).json());
+    const closes = all.items.map((i) => i.closesAt);
+    expect(closes.length).toBeGreaterThanOrEqual(2);
+    expect(closes).toEqual([...closes].sort((a, b) => b - a));
   }, 30_000);
 });
 

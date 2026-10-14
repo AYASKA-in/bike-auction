@@ -7,6 +7,7 @@ export default tseslint.config(
   {
     ignores: [
       "**/dist/**",
+      ".claude/**",
       "**/.wrangler/**",
       "**/node_modules/**",
       "**/worker-configuration.d.ts",

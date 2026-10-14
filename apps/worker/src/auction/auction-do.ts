@@ -9,10 +9,15 @@ import {
   formatPseudonym,
   IDEMPOTENCY_RETENTION_MS,
   makeIdempotencyRecord,
+  makeMaxIdempotencyRecord,
+  maxBidFingerprint,
   placeBid as evaluateBid,
+  minNextBidFor,
+  proxyOf,
   pseudonymMessage,
   resolveIdempotency,
   schedule as scheduleAuction,
+  setMaxBid as evaluateMaxBid,
   tick,
   toPublicEvent,
   toPublicView,
@@ -20,13 +25,18 @@ import {
   type AuctionEvent,
   type AuctionPatch,
   type AuctionState,
+  type BidKind,
   type CommandResult,
   type DomainError,
+  type IdempotencyRecord,
+  type ProxyBid,
   type PublicAuctionView,
   type StoredBidResult,
+  type StoredMaxBidResult,
 } from "@bike/domain";
 import { hmacSha256 } from "../lib/crypto";
 import { createLogger, errorFields } from "../lib/logger";
+import { writeMetric, type MetricPoint, type MetricsSink } from "../lib/metrics";
 import { migrateAuctionSchema } from "./schema";
 
 /**
@@ -41,11 +51,15 @@ import { migrateAuctionSchema } from "./schema";
 
 export type TimerKind = "lifecycle" | "outbox" | "idem-gc";
 
-export type BidRpcResult =
-  | { kind: "evaluated"; replayed: boolean; result: StoredBidResult }
+export type BidRpcResult<R = StoredBidResult> =
+  | { kind: "evaluated"; replayed: boolean; result: R }
   | { kind: "conflict" }
   | { kind: "not_found" }
-  | { kind: "rate_limited"; retryAfterMs: number };
+  | { kind: "rate_limited"; retryAfterMs: number }
+  | { kind: "account_closed" };
+export type RetireResult =
+  { ok: true } | { ok: false; reason: "LEADING" | "ACTIVE_MAX" | "WON_UNSETTLED" };
+export type MaxBidRpcResult = BidRpcResult<StoredMaxBidResult>;
 
 export type AdminResult =
   | { ok: true; details: AdminAuctionDetails }
@@ -67,18 +81,56 @@ export interface OpsInfo {
   timers: { kind: TimerKind; dueAt: number }[];
 }
 
-/** Admin-only: includes the reserve and the leader's user id. Never returned on buyer routes. */
+/**
+ * Admin-only: includes the reserve and the leader's user id. Never returned on buyer routes.
+ * Hidden maxima are excluded even here: a maximum is visible to its owner only (ADR 004).
+ */
 export interface AdminAuctionDetails {
-  state: AuctionState;
+  state: Omit<AuctionState, "proxies">;
   view: PublicAuctionView;
   ops: OpsInfo;
 }
+
+/**
+ * Compact, PII-free ops snapshot for the admin ops summary (one RPC per live auction). Read-only:
+ * it never commits a due transition, so polling it cannot change auction state.
+ */
+export interface OpsSnapshot {
+  status: AuctionState["status"];
+  seq: number;
+  projectedSeq: number;
+  pendingOutbox: number;
+  oldestPendingAgeMs: number | null;
+  viewers: number;
+  bidCount: number;
+  currentPriceMinor: number | null;
+  startsAt: number;
+  closesAt: number;
+  extensionCount: number;
+  lastSyncError: string | null;
+  consecutiveFailures: number;
+  lastSyncSuccessAt: number | null;
+  lastSyncAttemptAt: number | null;
+  /** Accepted bids in the last 5 minutes and the newest bid's time (from the ledger). */
+  bidsLast5m: number;
+  lastBidAt: number | null;
+  /** Timers due more than OPS_GRACE_MS ago (alarm late or failing). */
+  overdueTimers: number;
+  /** LIVE past closesAt, or SCHEDULED past startsAt, by more than OPS_GRACE_MS. */
+  deadlineOverdue: boolean;
+  /** Last alarm handler failure since this object instance started (in memory only). */
+  lastAlarmError: { at: number; message: string } | null;
+}
+
+/** Grace before a missed deadline or an overdue timer is reported as an anomaly. */
+export const OPS_GRACE_MS = 60_000;
 
 export interface PublicBid {
   seq: number;
   bidId: string;
   bidder: string;
   amountMinor: number;
+  kind: BidKind;
   at: number;
   isYou: boolean;
 }
@@ -187,6 +239,7 @@ export class AuctionDO extends DurableObject<Env> {
     requestId: string;
   }): Promise<BidRpcResult> {
     // ── async work BEFORE the critical section ──
+    const started = Date.now();
     const auctionId = this.load()?.auctionId;
     if (!auctionId) return { kind: "not_found" };
     const digest = await hmacSha256(
@@ -200,7 +253,7 @@ export class AuctionDO extends DurableObject<Env> {
     const fingerprint = bidFingerprint({ auctionId, amountMinor: cmd.amountMinor });
     const request = { userId: cmd.userId, key: cmd.idempotencyKey, fingerprint };
     const idem = resolveIdempotency(
-      this.loadIdempotency(cmd.userId, cmd.idempotencyKey),
+      this.loadIdempotency<StoredBidResult>(cmd.userId, cmd.idempotencyKey),
       request,
       now,
     );
@@ -209,6 +262,7 @@ export class AuctionDO extends DurableObject<Env> {
       return { kind: "evaluated", replayed: true, result: idem.result };
     }
     if (idem.kind === "conflict") return { kind: "conflict" };
+    if (this.isRetired(cmd.userId)) return { kind: "account_closed" };
     // Throttle only NEW commands: retries of a stored result are always answered.
     const throttled = this.throttle(cmd.userId, now);
     if (throttled > 0) return { kind: "rate_limited", retryAfterMs: throttled };
@@ -222,17 +276,7 @@ export class AuctionDO extends DurableObject<Env> {
     const record = makeIdempotencyRecord(request, decision, now);
     this.commit(decision.events, decision.state, () => {
       if (decision.ok) this.ensurePseudonym(cmd.userId, digest);
-      this.sql.exec(
-        `INSERT INTO idempotency (user_id, key, fingerprint, result_json, created_at) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(user_id, key) DO UPDATE SET fingerprint = excluded.fingerprint,
-           result_json = excluded.result_json, created_at = excluded.created_at`,
-        record.userId,
-        record.key,
-        record.fingerprint,
-        JSON.stringify(record.result),
-        record.createdAt,
-      );
-      if (!this.hasTimer("idem-gc")) this.setTimer("idem-gc", now + IDEMPOTENCY_RETENTION_MS);
+      this.storeIdempotency(record, now);
     });
     // ── committed ──
     this.publish(decision.events, state.leaderUserId);
@@ -243,8 +287,101 @@ export class AuctionDO extends DurableObject<Env> {
       ...(decision.ok
         ? { amountMinor: decision.bid.amountMinor }
         : { reason: decision.error.code }),
+      // Automatic responses are public bids; the maxima behind them are never logged.
+      automaticBids: decision.events.filter((e) => e.type === "bid.accepted" && e.kind === "PROXY")
+        .length,
+    });
+    this.metric({
+      event: decision.ok ? "bid_accepted" : "bid_rejected",
+      outcome: decision.ok ? "MANUAL" : decision.error.code,
+      // In-object processing time (pseudonym HMAC + evaluate + commit + broadcast).
+      durationMs: Date.now() - started,
+      count: decision.events.filter((e) => e.type === "bid.accepted").length,
+      index: auctionId,
     });
     return { kind: "evaluated", replayed: false, result: record.result };
+  }
+
+  /**
+   * Sets (or replaces) the caller's hidden maximum (BLUEPRINT §4.7). Same critical section, atomic
+   * commit, idempotency table and persistent throttle as placeBid. The maximum is stored only in
+   * `proxy_bids`; any automatic bids it causes are ordinary ledger rows with kind = 'PROXY'.
+   */
+  async setMaxBid(cmd: {
+    userId: string;
+    maxMinor: number;
+    idempotencyKey: string;
+    requestId: string;
+  }): Promise<MaxBidRpcResult> {
+    const auctionId = this.load()?.auctionId;
+    if (!auctionId) return { kind: "not_found" };
+    const digest = await hmacSha256(
+      this.env.PSEUDONYM_SECRET,
+      pseudonymMessage(auctionId, cmd.userId),
+    );
+
+    // ── critical section: synchronous from here to the end of commit() ──
+    const now = Date.now();
+    const state = this.load()!;
+    const fingerprint = maxBidFingerprint({ auctionId, maxMinor: cmd.maxMinor });
+    const request = { userId: cmd.userId, key: cmd.idempotencyKey, fingerprint };
+    const idem = resolveIdempotency(
+      this.loadIdempotency<StoredMaxBidResult>(cmd.userId, cmd.idempotencyKey),
+      request,
+      now,
+    );
+    if (idem.kind === "replay") {
+      this.log.info("auction.max_bid.replayed", { auctionId, requestId: cmd.requestId });
+      return { kind: "evaluated", replayed: true, result: idem.result };
+    }
+    if (idem.kind === "conflict") return { kind: "conflict" };
+    if (this.isRetired(cmd.userId)) return { kind: "account_closed" };
+    const throttled = this.throttle(cmd.userId, now);
+    if (throttled > 0) return { kind: "rate_limited", retryAfterMs: throttled };
+
+    const decision = evaluateMaxBid(state, {
+      bidId: crypto.randomUUID(),
+      userId: cmd.userId,
+      maxMinor: cmd.maxMinor,
+      now,
+    });
+    const record = makeMaxIdempotencyRecord(request, decision, now);
+    this.commit(decision.events, decision.state, () => {
+      if (decision.ok) this.ensurePseudonym(cmd.userId, digest);
+      this.storeIdempotency(record, now);
+    });
+    // ── committed ──
+    this.publish(decision.events, state.leaderUserId, decision.ok ? [cmd.userId] : []);
+    this.log.info(decision.ok ? "auction.max_bid.set" : "auction.max_bid.rejected", {
+      auctionId,
+      requestId: cmd.requestId,
+      seq: decision.state.seq,
+      ...(decision.ok
+        ? { isLeading: decision.outcome.isLeading }
+        : { reason: decision.error.code }),
+      automaticBids: decision.events.filter((e) => e.type === "bid.accepted").length,
+    });
+    this.metric({
+      event: decision.ok ? "max_bid_set" : "max_bid_rejected",
+      outcome: decision.ok ? "ok" : decision.error.code,
+      count: decision.events.filter((e) => e.type === "bid.accepted").length,
+      index: auctionId,
+    });
+    return { kind: "evaluated", replayed: false, result: record.result };
+  }
+
+  private storeIdempotency(record: IdempotencyRecord<unknown>, now: number): void {
+    this.sql.exec(
+      `INSERT INTO idempotency (user_id, key, fingerprint, result_json, created_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, key) DO UPDATE SET fingerprint = excluded.fingerprint,
+         result_json = excluded.result_json, created_at = excluded.created_at`,
+      record.userId,
+      record.key,
+      record.fingerprint,
+      JSON.stringify(record.result),
+      record.createdAt,
+    );
+    if (!this.hasTimer("idem-gc")) this.setTimer("idem-gc", now + IDEMPOTENCY_RETENTION_MS);
   }
 
   /** Sliding window over SQLite rows (synchronous: safe inside the critical section). */
@@ -261,6 +398,49 @@ export class AuctionDO extends DurableObject<Env> {
     if (r.n >= BID_THROTTLE.limit) return BID_THROTTLE.windowMs - (now - (r.first ?? now));
     this.sql.exec(`INSERT INTO bid_attempts (user_id, at) VALUES (?, ?)`, userId, now);
     return 0;
+  }
+
+  // ═════════════════════════════ account closure ═════════════════════════════
+
+  /**
+   * Atomically decide whether `userId` may close their account as far as THIS auction is concerned,
+   * and if so retire them here (no further bids or maxima from them; see the check in placeBid /
+   * setMaxBid). Refused while they lead a LIVE auction, hold a maximum that can still bid, or won a
+   * sale that closed after `wonSince`. Synchronous after resolveNow(): no command can interleave.
+   */
+  retireUser(userId: string, wonSince: number): RetireResult | null {
+    const s = this.resolveNow();
+    if (!s) return null;
+    if (s.status === "LIVE") {
+      if (s.leaderUserId === userId) return { ok: false, reason: "LEADING" };
+      const max = proxyOf(s, userId)?.maxMinor ?? null;
+      if (max !== null && max >= minNextBidFor(s)) return { ok: false, reason: "ACTIVE_MAX" };
+    }
+    if (
+      s.status === "ENDED" &&
+      s.outcome === "SOLD" &&
+      s.leaderUserId === userId &&
+      s.closesAt > wonSince
+    ) {
+      return { ok: false, reason: "WON_UNSETTLED" };
+    }
+    this.sql.exec(
+      `INSERT INTO retired_users (user_id, retired_at) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING`,
+      userId,
+      Date.now(),
+    );
+    return { ok: true };
+  }
+
+  /** Undo retireUser (the deletion was refused elsewhere and is rolled back). */
+  unretireUser(userId: string): void {
+    this.sql.exec(`DELETE FROM retired_users WHERE user_id = ?`, userId);
+  }
+
+  private isRetired(userId: string): boolean {
+    return (
+      this.sql.exec(`SELECT 1 FROM retired_users WHERE user_id = ?`, userId).toArray().length > 0
+    );
   }
 
   // ═════════════════════════════ reads ═════════════════════════════
@@ -282,10 +462,11 @@ export class AuctionDO extends DurableObject<Env> {
         bid_id: string;
         user_id: string;
         amount_minor: number;
+        kind: BidKind;
         at: number;
         code: string | null;
       }>(
-        `SELECT b.seq, b.bid_id, b.user_id, b.amount_minor, b.at, p.code
+        `SELECT b.seq, b.bid_id, b.user_id, b.amount_minor, b.kind, b.at, p.code
          FROM bids b LEFT JOIN pseudonyms p ON p.user_id = b.user_id
          WHERE b.seq < ? ORDER BY b.seq DESC LIMIT ?`,
         q.beforeSeq ?? Number.MAX_SAFE_INTEGER,
@@ -297,6 +478,7 @@ export class AuctionDO extends DurableObject<Env> {
       bidId: r.bid_id,
       bidder: formatPseudonym(r.code ?? "0000"),
       amountMinor: r.amount_minor,
+      kind: r.kind,
       at: r.at,
       isYou: q.viewerUserId !== null && r.user_id === q.viewerUserId,
     }));
@@ -340,6 +522,55 @@ export class AuctionDO extends DurableObject<Env> {
     };
   }
 
+  /** Admin ops summary row (read-only; null when the object holds no auction). */
+  opsSnapshot(): OpsSnapshot | null {
+    const s = this.load();
+    if (!s) return null;
+    const o = this.ops();
+    const now = Date.now();
+    const bids = this.sql
+      .exec<{ n: number; last: number | null }>(
+        `SELECT (SELECT COUNT(*) FROM bids WHERE at >= ?) AS n, (SELECT MAX(at) FROM bids) AS last`,
+        now - 5 * 60_000,
+      )
+      .one();
+    const deadline =
+      s.status === "LIVE" ? s.closesAt : s.status === "SCHEDULED" ? s.startsAt : null;
+    return {
+      status: s.status,
+      seq: o.seq,
+      projectedSeq: o.projectedSeq,
+      pendingOutbox: o.pendingOutbox,
+      oldestPendingAgeMs: o.oldestPendingAgeMs,
+      viewers: o.connections,
+      bidCount: s.bidCount,
+      currentPriceMinor: s.currentPriceMinor,
+      startsAt: s.startsAt,
+      closesAt: s.closesAt,
+      extensionCount: s.extensionCount,
+      lastSyncError: o.sync.lastError,
+      consecutiveFailures: o.sync.consecutiveFailures,
+      lastSyncSuccessAt: o.sync.lastSuccessAt,
+      lastSyncAttemptAt: o.sync.lastAttemptAt,
+      bidsLast5m: bids.n,
+      lastBidAt: bids.last,
+      overdueTimers: o.timers.filter((t) => t.dueAt < now - OPS_GRACE_MS).length,
+      deadlineOverdue: deadline !== null && deadline < now - OPS_GRACE_MS,
+      lastAlarmError: this.lastAlarmError,
+    };
+  }
+
+  private lastAlarmError: { at: number; message: string } | null = null;
+
+  /** Best-effort metric for this auction (no-op when Analytics Engine is not bound). */
+  private metric(p: MetricPoint): void {
+    writeMetric((this.env as { METRICS?: MetricsSink }).METRICS, {
+      ...p,
+      index: p.index ?? this.cached?.auctionId ?? undefined,
+      version: this.env.APP_VERSION,
+    });
+  }
+
   async opsWithAlarm(): Promise<OpsInfo> {
     return { ...this.ops(), alarm: await this.ctx.storage.getAlarm() };
   }
@@ -352,12 +583,32 @@ export class AuctionDO extends DurableObject<Env> {
 
   // ═════════════════════════════ persistence ═════════════════════════════
 
+  /**
+   * State = state_json (everything public-or-admin) + proxy_bids (hidden maxima). Maxima are kept
+   * out of state_json on purpose, so the only place a maximum is stored is its own table.
+   */
   private load(): AuctionState | null {
     if (this.cached === undefined) {
       const row = this.sql
         .exec<{ state_json: string }>(`SELECT state_json FROM auction_state WHERE id = 1`)
         .toArray()[0];
-      this.cached = row ? (JSON.parse(row.state_json) as AuctionState) : null;
+      if (!row) {
+        this.cached = null;
+      } else {
+        const proxies: ProxyBid[] = this.sql
+          .exec<{ user_id: string; max_minor: number; set_seq: number; updated_at: number }>(
+            `SELECT user_id, max_minor, set_seq, updated_at FROM proxy_bids ORDER BY set_seq, user_id`,
+          )
+          .toArray()
+          .map((r) => ({
+            userId: r.user_id,
+            maxMinor: r.max_minor,
+            setSeq: r.set_seq,
+            updatedAt: r.updated_at,
+          }));
+        const persisted = JSON.parse(row.state_json) as Omit<AuctionState, "proxies">;
+        this.cached = { ...persisted, proxies };
+      }
     }
     return this.cached;
   }
@@ -386,11 +637,12 @@ export class AuctionDO extends DurableObject<Env> {
         );
         if (e.type === "bid.accepted") {
           this.sql.exec(
-            `INSERT INTO bids (seq, bid_id, user_id, amount_minor, at) VALUES (?, ?, ?, ?, ?)`,
+            `INSERT INTO bids (seq, bid_id, user_id, amount_minor, kind, at) VALUES (?, ?, ?, ?, ?, ?)`,
             e.seq,
             e.bidId,
             e.userId,
             e.amountMinor,
+            e.kind,
             e.at,
           );
         }
@@ -399,14 +651,30 @@ export class AuctionDO extends DurableObject<Env> {
         throw new Error(`State seq ${next.seq} does not match events (${expected - 1})`);
       }
       if (next !== current) {
+        const { proxies, ...persisted } = next;
         this.sql.exec(
           `INSERT INTO auction_state (id, seq, state_json, updated_at) VALUES (1, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET seq = excluded.seq, state_json = excluded.state_json,
              updated_at = excluded.updated_at`,
           next.seq,
-          JSON.stringify(next),
+          JSON.stringify(persisted),
           now,
         );
+        // Maxima are only ever set or replaced (never removed), so upserting changes suffices.
+        const before = new Map((current?.proxies ?? []).map((p) => [p.userId, p]));
+        for (const p of proxies) {
+          const old = before.get(p.userId);
+          if (old && old.maxMinor === p.maxMinor && old.setSeq === p.setSeq) continue;
+          this.sql.exec(
+            `INSERT INTO proxy_bids (user_id, max_minor, set_seq, updated_at) VALUES (?, ?, ?, ?)
+             ON CONFLICT(user_id) DO UPDATE SET max_minor = excluded.max_minor,
+               set_seq = excluded.set_seq, updated_at = excluded.updated_at`,
+            p.userId,
+            p.maxMinor,
+            p.setSeq,
+            p.updatedAt,
+          );
+        }
       }
       this.syncLifecycleTimer(next);
       if (events.length > 0) this.setTimer("outbox", now);
@@ -433,7 +701,8 @@ export class AuctionDO extends DurableObject<Env> {
     return t.state;
   }
 
-  private loadIdempotency(userId: string, key: string) {
+  /** R is the result type of the command being retried; a different command's key conflicts. */
+  private loadIdempotency<R>(userId: string, key: string): IdempotencyRecord<R> | null {
     const row = this.sql
       .exec<{ fingerprint: string; result_json: string; created_at: number }>(
         `SELECT fingerprint, result_json, created_at FROM idempotency WHERE user_id = ? AND key = ?`,
@@ -446,7 +715,7 @@ export class AuctionDO extends DurableObject<Env> {
           userId,
           key,
           fingerprint: row.fingerprint,
-          result: JSON.parse(row.result_json) as StoredBidResult,
+          result: JSON.parse(row.result_json) as R,
           createdAt: row.created_at,
         }
       : null;
@@ -489,8 +758,8 @@ export class AuctionDO extends DurableObject<Env> {
   }
 
   private adminDetails(): AdminAuctionDetails {
-    const s = this.load()!;
-    return { state: s, view: this.viewFor(s, null), ops: this.ops() };
+    const { proxies: _hidden, ...state } = this.load()!;
+    return { state, view: this.viewFor(this.load()!, null), ops: this.ops() };
   }
 
   // ═════════════════════════════ alarm multiplexer ═════════════════════════════
@@ -506,6 +775,7 @@ export class AuctionDO extends DurableObject<Env> {
       .exec<{ kind: TimerKind }>(`SELECT kind FROM timers WHERE due_at <= ? ORDER BY due_at`, now)
       .toArray()
       .map((r) => r.kind);
+    let outcome = "ok";
     try {
       for (const kind of due) {
         if (kind === "lifecycle") this.resolveNow();
@@ -513,9 +783,18 @@ export class AuctionDO extends DurableObject<Env> {
         else if (kind === "idem-gc") this.gcIdempotency(now);
       }
     } catch (err) {
-      this.log.error("auction.alarm_failed", errorFields(err));
+      outcome = "error";
+      const fields = errorFields(err);
+      this.lastAlarmError = { at: now, message: String(fields.errorMessage).slice(0, 300) };
+      this.log.error("auction.alarm_failed", { auctionId: this.cached?.auctionId, ...fields });
     } finally {
       this.rescheduleAlarm();
+      this.metric({
+        event: "alarm_run",
+        outcome,
+        durationMs: Date.now() - now,
+        count: due.length,
+      });
     }
   }
 
@@ -699,6 +978,14 @@ export class AuctionDO extends DurableObject<Env> {
         upToSeq: upTo,
         lagMs: now - pending[0]!.at,
       });
+      this.metric({
+        event: "projection_lag",
+        outcome: "ok",
+        durationMs: now - pending[0]!.at,
+        count: pending.length,
+        value: this.pendingOutbox(),
+        index: state.auctionId,
+      });
     } catch (err) {
       let failures = 0;
       this.ctx.storage.transactionSync(() => {
@@ -723,6 +1010,14 @@ export class AuctionDO extends DurableObject<Env> {
         auctionId: state.auctionId,
         ...errorFields(err),
         consecutiveFailures: failures,
+      });
+      this.metric({
+        event: "projection_failure",
+        outcome: "d1_error",
+        durationMs: now - pending[0]!.at,
+        count: pending.length,
+        value: failures,
+        index: state.auctionId,
       });
     }
   }
@@ -750,6 +1045,12 @@ export class AuctionDO extends DurableObject<Env> {
       }),
     );
     this.sendSnapshot(server, state, userId);
+    this.metric({
+      event: "ws_connect",
+      outcome: userId ? "user" : "anon",
+      count: this.ctx.getWebSockets("all").length,
+      index: state.auctionId,
+    });
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -800,29 +1101,103 @@ export class AuctionDO extends DurableObject<Env> {
     } catch {
       // already closed
     }
+    let att: Attachment | null = null;
+    try {
+      att = ws.deserializeAttachment() as Attachment | null;
+    } catch {
+      // no attachment
+    }
+    this.metric({
+      event: "ws_disconnect",
+      // Close codes are a small fixed set (1000, 1001, 1006, 1008 …): bounded.
+      outcome: String(code),
+      durationMs: att?.connectedAt ? Date.now() - att.connectedAt : 0,
+      count: Math.max(0, this.ctx.getWebSockets("all").length - 1),
+      // 1 = abnormal close (no clean close frame / server error / policy): what clients see as a
+      // dropped connection and must reconnect from. 1000/1001/1005 are normal.
+      value: [1000, 1001, 1005].includes(code) ? 0 : 1,
+      index: this.load()?.auctionId,
+    });
+  }
+
+  override webSocketError(_ws: WebSocket, err: unknown): void {
+    this.metric({ event: "ws_error", outcome: "error", count: 1, value: 1 });
+    this.log.warn("auction.ws_error", { auctionId: this.cached?.auctionId, ...errorFields(err) });
   }
 
   connectionCount(): number {
     return this.ctx.getWebSockets("all").length;
   }
 
-  /** Broadcasts committed events in seq order (public form only) and targeted outbid notices. */
-  private publish(events: readonly AuctionEvent[], previousLeader: string | null): void {
+  /**
+   * Broadcasts committed events in seq order (public form only), then targeted messages:
+   *  - `you.outbid` once per commit, right after its LAST bid, to every user who led before or
+   *    during the commit but not after it. A leader whose maximum defended the lead within the
+   *    same commit is not told they were outbid; a manual bidder countered by a maximum is.
+   *  - a personal `auction.snapshot` to `personal` users and to owners of automatic (PROXY) bids:
+   *    their client did not send those bids, so it learns "you're leading" and its own
+   *    `myMaxMinor` from the authoritative view rather than from the public feed.
+   */
+  private publish(
+    events: readonly AuctionEvent[],
+    previousLeader: string | null,
+    personal: readonly string[] = [],
+  ): void {
     let leader = previousLeader;
-    for (const e of events) {
+    const everLeading = new Set<string>(previousLeader === null ? [] : [previousLeader]);
+    const snapshotFor = new Set(personal);
+    let lastBid = -1;
+    events.forEach((e, i) => {
+      if (e.type === "bid.accepted") lastBid = i;
+      else if (
+        e.type === "auction.started" ||
+        e.type === "auction.extended" ||
+        e.type === "auction.ended" ||
+        e.type === "auction.cancelled"
+      ) {
+        this.metric({
+          event: "auction_lifecycle",
+          // started | extended | ended:<SOLD|RESERVE_NOT_MET|NO_BIDS> | cancelled (bounded)
+          outcome:
+            e.type === "auction.ended"
+              ? `ended:${(e as { outcome?: string }).outcome ?? ""}`
+              : e.type.slice("auction.".length),
+          // How late the transition was committed vs its deadline (alarm/lazy-close delay).
+          durationMs:
+            e.type === "auction.ended" ? Math.max(0, e.at - (this.cached?.closesAt ?? e.at)) : 0,
+          count: 1,
+        });
+      }
+    });
+    events.forEach((e, i) => {
       const pub = toPublicEvent(e, (uid) => this.pseudonymOf(uid));
       if (pub) this.send("all", { protocolVersion: WS_PROTOCOL_VERSION, ...pub });
-      if (e.type === "bid.accepted") {
-        if (leader !== null && leader !== e.userId) {
-          this.send(`user:${leader}`, {
-            protocolVersion: WS_PROTOCOL_VERSION,
-            type: "you.outbid",
-            seq: e.seq,
-            currentPriceMinor: e.amountMinor,
-            minNextBidMinor: e.minNextBidMinor,
-          });
+      if (e.type !== "bid.accepted") return;
+      leader = e.userId;
+      everLeading.add(e.userId);
+      if (e.kind === "PROXY") snapshotFor.add(e.userId);
+      if (i !== lastBid) return;
+      for (const u of everLeading) {
+        if (u === leader) continue;
+        this.send(`user:${u}`, {
+          protocolVersion: WS_PROTOCOL_VERSION,
+          type: "you.outbid",
+          seq: e.seq,
+          currentPriceMinor: e.amountMinor,
+          minNextBidMinor: e.minNextBidMinor,
+        });
+      }
+    });
+    const state = snapshotFor.size > 0 ? this.load() : null;
+    if (state) {
+      for (const u of snapshotFor) {
+        for (const ws of this.ctx.getWebSockets(`user:${u}`)) {
+          try {
+            this.sendSnapshot(ws, state, u);
+          } catch {
+            // A broken socket never fails a committed command; the client resyncs on reconnect.
+          }
         }
-        leader = e.userId;
       }
     }
     if (events.length > 0) this.ctx.waitUntil(this.drainOutbox());

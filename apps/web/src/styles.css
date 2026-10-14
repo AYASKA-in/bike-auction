@@ -4,24 +4,146 @@
 /*
   "Trading desk meets garage": cool concrete surfaces, asphalt ink, one hi-vis orange.
   Winning/outbid states always pair colour with text and an icon.
+
+  Token roles (both themes redefine the same names, so every page themes itself):
+    concrete   page background            paper      raised surface (cards, header)
+    field      input background           asphalt    primary ink (and the inverse surface)
+    steel      secondary ink              rule       hairlines            control  input borders
+    hivis      the one accent (primary actions, LIVE); on-hivis is the ink that sits on it
+    hivis-ink  orange used as text/link   ledger     "winning" ink        win     solid green fill
+    amber      "outbid"/caution ink       caution    bright amber fill    danger(-solid) errors
+    pit*       the live bid panel: dark ("asphalt") in both themes
+  Contrast for every text pair is >= 4.5:1 in both themes (see the Day 8 report).
 */
 @theme {
   --font-sans: "Archivo Variable", ui-sans-serif, system-ui, sans-serif;
 
   --color-concrete: #eceeeb;
   --color-paper: #f8f9f7;
+  --color-field: #ffffff;
   --color-asphalt: #1d2125;
   --color-asphalt-2: #2a3036;
-  --color-steel: #5a646d;
+  --color-steel: #566069;
   --color-rule: #d3d7d3;
+  --color-control: #7d878f;
   --color-hivis: #f25c05;
-  --color-hivis-ink: #b84300;
-  --color-ledger: #1e7a4c;
-  --color-amber: #a86a12;
+  --color-hivis-hover: #ff7424;
+  --color-on-hivis: #14171a;
+  --color-hivis-ink: #b04000;
+  --color-ledger: #1a7346;
+  --color-win: #1e7a4c;
+  --color-amber: #8a5508;
   --color-danger: #b42318;
+  --color-danger-solid: #b42318;
+  /* Bright amber for the outbid banner on asphalt: on-hivis ink on it is ~9.9:1. */
+  --color-caution: #f5b544;
+
+  --color-pit: #1d2125;
+  --color-pit-2: #2a3036;
+  --color-pit-ink: #f3f4f1;
+  --color-pit-line: #ffffff00;
+  --color-pit-field: #f8f9f7;
+  --color-pit-field-ink: #1d2125;
+  /* Status dot on the dark panel ("connected"/"in sync"): 8:1 on pit, paired with text. */
+  --color-go: #3ccf85;
+
+  --shadow-card: 0 1px 2px #1d212514, 0 8px 24px -16px #1d212559;
+  --shadow-lift: 0 2px 4px #1d21251a, 0 18px 40px -20px #1d212580;
+  --shadow-pop: 0 12px 40px -12px #1d212580;
+}
+
+/* Dark theme: an explicit choice ([data-theme=dark]) or the OS setting when the choice is System. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-concrete: #111417;
+  --color-paper: #181c20;
+  --color-field: #0e1114;
+  --color-asphalt: #e6e9e6;
+  --color-asphalt-2: #cfd4d0;
+  --color-steel: #9ba5ae;
+  --color-rule: #2c3339;
+  --color-control: #66717b;
+  --color-hivis: #ff6a1a;
+  --color-hivis-hover: #ff8640;
+  --color-hivis-ink: #ff8c4d;
+  --color-ledger: #4cc38a;
+  --color-amber: #f0b24e;
+  --color-danger: #ff8a7d;
+  --color-pit: #1f252a;
+  --color-pit-2: #2b3238;
+  --color-pit-line: #ffffff1f;
+  --color-pit-field: #11161a;
+  --color-pit-field-ink: #f3f4f1;
+  --shadow-card: 0 1px 0 #ffffff0a inset, 0 8px 24px -16px #000000b3;
+  --shadow-lift: 0 1px 0 #ffffff0f inset, 0 18px 40px -20px #000000cc;
+  --shadow-pop: 0 12px 40px -12px #000000d9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --color-concrete: #111417;
+    --color-paper: #181c20;
+    --color-field: #0e1114;
+    --color-asphalt: #e6e9e6;
+    --color-asphalt-2: #cfd4d0;
+    --color-steel: #9ba5ae;
+    --color-rule: #2c3339;
+    --color-control: #66717b;
+    --color-hivis: #ff6a1a;
+    --color-hivis-hover: #ff8640;
+    --color-hivis-ink: #ff8c4d;
+    --color-ledger: #4cc38a;
+    --color-amber: #f0b24e;
+    --color-danger: #ff8a7d;
+    --color-pit: #1f252a;
+    --color-pit-2: #2b3238;
+    --color-pit-line: #ffffff1f;
+    --color-pit-field: #11161a;
+    --color-pit-field-ink: #f3f4f1;
+    --shadow-card: 0 1px 0 #ffffff0a inset, 0 8px 24px -16px #000000b3;
+    --shadow-lift: 0 1px 0 #ffffff0f inset, 0 18px 40px -20px #000000cc;
+    --shadow-pop: 0 12px 40px -12px #000000d9;
+  }
+}
+
+/* `dark:` follows the same rule as the tokens (explicit choice, else the OS). */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]), :root:not([data-theme="light"]) *) {
+      @slot;
+    }
+  }
+}
+
+/*
+  White on hi-vis orange is ~3.3:1 (fails AA). The design system puts dark ink on orange
+  (text-on-hivis); this catches any remaining `bg-hivis text-white` markup (and its
+  hover:bg-hivis-ink, which would then be dark on dark) in pages that predate the tokens.
+*/
+.bg-hivis.text-white {
+  color: var(--color-on-hivis);
+}
+.bg-hivis.text-white:hover {
+  background-color: var(--color-hivis-hover);
+}
+
+/* Pages owned elsewhere still use a literal white input background: keep it legible in dark. */
+:root[data-theme="dark"] .bg-white {
+  background-color: var(--color-field);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .bg-white {
+    background-color: var(--color-field);
+  }
 }
 
 @layer base {
+  :root {
+    color-scheme: light;
+  }
   html {
     background: var(--color-concrete);
     color: var(--color-asphalt);
@@ -29,6 +151,13 @@
     font-variation-settings: "wdth" 100;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    scroll-padding-top: 5rem;
+  }
+  body {
+    background: var(--color-concrete);
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--color-hivis) 35%, transparent);
   }
   :focus-visible {
     outline: 3px solid var(--color-hivis);
@@ -40,7 +169,9 @@
     *::before,
     *::after {
       animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
     }
   }
 }
@@ -54,3 +185,59 @@
 @utility tnum {
   font-variant-numeric: tabular-nums lining-nums;
 }
+
+/* Road-barrier stripe: the one decorative device, used on the hero board's top edge. */
+@utility hazard {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--color-hivis) 0 12px,
+    var(--color-on-hivis) 12px 24px
+  );
+}
+
+/* live page (Day 7) */
+@keyframes live-flash {
+  0% {
+    background-color: color-mix(in srgb, var(--color-hivis) 55%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+@keyframes live-pop {
+  0% {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes menu-in {
+  0% {
+    transform: translateY(-6px);
+    opacity: 0;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+@utility live-flash {
+  animation: live-flash 900ms ease-out;
+}
+@utility live-pop {
+  animation: live-pop 220ms ease-out;
+}
+@utility menu-in {
+  animation: menu-in 160ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-flash,
+  .live-pop,
+  .menu-in {
+    animation: none;
+  }
+}
+/* end live page (Day 7) */

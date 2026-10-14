@@ -5,11 +5,17 @@ import { z } from "zod";
 import { StatusBadge } from "@/components/status";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { EmptyState, LoadError } from "@/components/ui/empty-state";
+import { controlClass } from "@/components/ui/form";
+import { PageHeader, StatTile } from "@/components/ui/page";
 import { Skeleton } from "@/components/ui/skeleton";
+import * as t from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 import { adminAuctionsQuery, type AdminAuctionRow } from "@/lib/admin";
 import { apiGet, apiSend } from "@/lib/api";
 import { formatINR, formatIST } from "@/lib/format";
 import { authErrorMessage } from "@/lib/session";
+import { AdminNav } from "./admin-ops";
 
 const Overview = z.object({
   bikes: z.number(),
@@ -37,87 +43,111 @@ export function AdminPage() {
   const rows = (auctions.data ?? []).filter((r) => !filter || r.status === filter);
 
   return (
-    <section className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="font-expanded text-3xl font-extrabold tracking-tight">Auction desk</h1>
-          <p className="mt-1 text-steel">Listings, schedules and live auctions in one place.</p>
-        </div>
-        <div className="flex gap-2">
-          <Button asChild variant="secondary">
-            <Link to="/admin/bikes">Motorcycles</Link>
-          </Button>
+    <section className="mx-auto max-w-6xl px-4 pt-6 pb-14 sm:px-6">
+      <AdminNav current="desk" />
+      <PageHeader
+        className="mt-6"
+        title="Auction desk"
+        description="Listings, schedules and live auctions in one place."
+        actions={
           <Button asChild>
             <Link to="/admin/bikes/new">Add motorcycle</Link>
           </Button>
-        </div>
-      </div>
+        }
+      />
 
-      <dl className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <Kpi label="Motorcycles" value={overview.data?.bikes} />
+      <ul
+        aria-label="Auction counts (select one to filter the table)"
+        className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6"
+      >
+        <li>
+          <Kpi label="Motorcycles" value={overview.data?.bikes} />
+        </li>
         {STATUSES.map((s) => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => setFilter(filter === s ? null : s)}
-            aria-pressed={filter === s}
-            className={`rounded-xl border bg-paper p-4 text-left transition-colors ${filter === s ? "border-hivis" : "border-rule hover:border-asphalt"}`}
-          >
-            <dt className="text-sm text-steel">{LABEL[s]}</dt>
-            <dd className="font-expanded text-3xl font-extrabold tnum">
-              {overview.isPending ? "–" : count(s)}
-            </dd>
-          </button>
-        ))}
-      </dl>
-
-      <div className="mt-8 overflow-hidden rounded-xl border border-rule bg-paper">
-        <div className="flex items-center justify-between border-b border-rule px-4 py-3">
-          <h2 className="font-bold">{filter ? LABEL[filter] : "All auctions"}</h2>
-          {filter && (
+          <li key={s}>
             <button
-              className="text-sm font-semibold underline underline-offset-4"
-              onClick={() => setFilter(null)}
+              type="button"
+              onClick={() => setFilter(filter === s ? null : s)}
+              aria-pressed={filter === s}
+              className={cn(
+                "h-full w-full rounded-xl text-left transition-shadow hover:shadow-lift",
+                filter === s && "ring-2 ring-hivis ring-offset-2 ring-offset-concrete",
+              )}
             >
-              Show all
+              <StatTile
+                label={
+                  <>
+                    {LABEL[s]}
+                    {filter === s && (
+                      <span className="font-semibold text-asphalt"> (filter on)</span>
+                    )}
+                  </>
+                }
+                value={overview.isPending ? "–" : count(s)}
+              />
             </button>
-          )}
-        </div>
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-8 flex min-h-11 flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-bold">{filter ? LABEL[filter] : "All auctions"}</h2>
+        {filter && (
+          <Button variant="ghost" size="sm" onClick={() => setFilter(null)}>
+            Show all auctions
+          </Button>
+        )}
+      </div>
+      <div className="mt-3">
         {auctions.isPending ? (
-          <div className="space-y-2 p-4">
+          <div className="space-y-2 rounded-xl border border-rule bg-paper p-4 shadow-card">
             {[0, 1, 2].map((i) => (
               <Skeleton key={i} className="h-12 w-full" />
             ))}
           </div>
+        ) : auctions.isError ? (
+          <LoadError
+            title="Couldn't load auctions."
+            detail={authErrorMessage(auctions.error)}
+            onRetry={() => void auctions.refetch()}
+          />
         ) : rows.length === 0 ? (
-          <p className="p-8 text-center text-steel">
-            No auctions here yet. Add a motorcycle, record its inspection, then create an auction
-            from its page.
-          </p>
+          <EmptyState
+            title={filter ? `No ${LABEL[filter].toLowerCase()} auctions` : "No auctions here yet"}
+            body="Add a motorcycle, record its inspection, then create an auction from its page."
+            action={
+              <Button asChild variant="secondary">
+                <Link to="/admin/bikes/new">Add motorcycle</Link>
+              </Button>
+            }
+          />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[56rem] text-sm">
-              <thead className="text-left text-steel">
-                <tr className="border-b border-rule">
-                  <th scope="col" className="px-4 py-2 font-semibold">
+          <t.TableFrame label={filter ? `${LABEL[filter]} auctions` : "All auctions"}>
+            <table className={cn(t.table, "min-w-[56rem]")}>
+              <caption className="sr-only">
+                {filter ? LABEL[filter] : "All"} auctions with status, price, bids and schedule
+              </caption>
+              <thead className={t.thead}>
+                <tr>
+                  <th scope="col" className={t.th}>
                     Motorcycle
                   </th>
-                  <th scope="col" className="px-4 py-2 font-semibold">
+                  <th scope="col" className={t.th}>
                     Status
                   </th>
-                  <th scope="col" className="px-4 py-2 text-right font-semibold">
+                  <th scope="col" className={cn(t.th, "text-right")}>
                     Price
                   </th>
-                  <th scope="col" className="px-4 py-2 text-right font-semibold">
+                  <th scope="col" className={cn(t.th, "text-right")}>
                     Bids
                   </th>
-                  <th scope="col" className="px-4 py-2 font-semibold">
+                  <th scope="col" className={t.th}>
                     Starts
                   </th>
-                  <th scope="col" className="px-4 py-2 font-semibold">
+                  <th scope="col" className={t.th}>
                     Closes
                   </th>
-                  <th scope="col" className="px-4 py-2 font-semibold">
+                  <th scope="col" className={t.th}>
                     <span className="sr-only">Actions</span>
                   </th>
                 </tr>
@@ -128,7 +158,7 @@ export function AdminPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </t.TableFrame>
         )}
       </div>
     </section>
@@ -136,12 +166,7 @@ export function AdminPage() {
 }
 
 function Kpi({ label, value }: { label: string; value: number | undefined }) {
-  return (
-    <div className="rounded-xl border border-rule bg-asphalt p-4 text-paper">
-      <dt className="text-sm text-paper/70">{label}</dt>
-      <dd className="font-expanded text-3xl font-extrabold tnum">{value ?? "–"}</dd>
-    </div>
-  );
+  return <StatTile label={label} value={value ?? "–"} />;
 }
 
 function AuctionRow({ r }: { r: AdminAuctionRow }) {
@@ -165,46 +190,51 @@ function AuctionRow({ r }: { r: AdminAuctionRow }) {
   const open = r.status === "DRAFT" || r.status === "SCHEDULED" || r.status === "LIVE";
   return (
     <>
-      <tr className="border-b border-rule last:border-0">
-        <th scope="row" className="px-4 py-3 text-left font-semibold">
-          <Link to="/admin/bikes/$bikeId" params={{ bikeId: r.bikeId }} className="hover:underline">
+      <tr className={t.tr}>
+        <th scope="row" className={cn(t.rowHeader, "min-w-44 align-middle")}>
+          <Link
+            to="/admin/bikes/$bikeId"
+            params={{ bikeId: r.bikeId }}
+            className="underline-offset-4 hover:underline"
+          >
             {r.title}
           </Link>
         </th>
-        <td className="px-4 py-3">
+        <td className={cn(t.td, "align-middle")}>
           <StatusBadge status={r.status} outcome={r.outcome} />
         </td>
-        <td className="px-4 py-3 text-right font-semibold tnum">
+        <td className={cn(t.td, t.num, "align-middle font-semibold")}>
           {formatINR(r.currentPriceMinor ?? r.startPriceMinor)}
         </td>
-        <td className="px-4 py-3 text-right tnum">{r.bidCount}</td>
-        <td className="px-4 py-3">{formatIST(r.startsAt)}</td>
-        <td className="px-4 py-3">{formatIST(r.closesAt)}</td>
-        <td className="px-4 py-3">
+        <td className={cn(t.td, t.num, "align-middle")}>{r.bidCount}</td>
+        <td className={cn(t.td, "align-middle whitespace-nowrap tnum")}>{formatIST(r.startsAt)}</td>
+        <td className={cn(t.td, "align-middle whitespace-nowrap tnum")}>{formatIST(r.closesAt)}</td>
+        <td className={cn(t.td, "align-middle")}>
           <div className="flex justify-end gap-1">
             {r.status === "DRAFT" && (
               <>
-                <Button size="md" variant="ghost" asChild>
+                <Button size="sm" variant="ghost" className="whitespace-nowrap" asChild>
                   <Link to="/admin/bikes/$bikeId" params={{ bikeId: r.bikeId }} hash="auction">
                     Edit draft
                   </Link>
                 </Button>
-                <Button size="md" onClick={() => schedule.mutate()} disabled={schedule.isPending}>
+                <Button size="sm" onClick={() => schedule.mutate()} loading={schedule.isPending}>
                   {schedule.isPending ? "Scheduling…" : "Schedule"}
                 </Button>
               </>
             )}
             {r.status !== "DRAFT" && (
-              <Button size="md" variant="ghost" asChild>
-                <Link to="/auctions/$auctionId" params={{ auctionId: r.auctionId }}>
+              <Button size="sm" variant="ghost" asChild>
+                <Link to="/admin/auctions/$auctionId" params={{ auctionId: r.auctionId }}>
                   View
                 </Link>
               </Button>
             )}
             {open && (
               <Button
-                size="md"
+                size="sm"
                 variant="ghost"
+                className="text-danger"
                 onClick={() => setCancelling((c) => !c)}
                 aria-expanded={cancelling}
               >
@@ -215,8 +245,8 @@ function AuctionRow({ r }: { r: AdminAuctionRow }) {
         </td>
       </tr>
       {(cancelling || schedule.isError) && (
-        <tr className="border-b border-rule bg-concrete/60">
-          <td colSpan={7} className="px-4 py-3">
+        <tr className="border-t border-rule bg-concrete/60">
+          <td colSpan={7} className="px-4 py-4 sm:px-5">
             {schedule.isError && <Alert>{authErrorMessage(schedule.error)}</Alert>}
             {cancelling && (
               <form
@@ -226,7 +256,7 @@ function AuctionRow({ r }: { r: AdminAuctionRow }) {
                   cancel.mutate();
                 }}
               >
-                <label className="flex min-w-64 flex-1 flex-col gap-1 text-sm font-semibold">
+                <label className="flex min-w-64 flex-1 flex-col gap-1.5 text-sm font-semibold">
                   Reason for cancelling (shown to bidders)
                   <input
                     value={reason}
@@ -234,17 +264,18 @@ function AuctionRow({ r }: { r: AdminAuctionRow }) {
                     minLength={3}
                     maxLength={500}
                     required
-                    className="h-11 rounded-md border border-steel/40 bg-white px-3 font-normal"
+                    className={cn(controlClass, "h-11 font-normal")}
                   />
                 </label>
                 <Button
                   type="submit"
-                  variant="secondary"
-                  disabled={cancel.isPending || reason.trim().length < 3}
+                  variant="danger"
+                  loading={cancel.isPending}
+                  disabled={reason.trim().length < 3}
                 >
                   Cancel auction
                 </Button>
-                <Button type="button" variant="ghost" onClick={() => setCancelling(false)}>
+                <Button type="button" variant="outline" onClick={() => setCancelling(false)}>
                   Keep it
                 </Button>
                 {cancel.isError && (

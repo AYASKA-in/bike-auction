@@ -28,3 +28,9 @@ enums; NOCASE indexes on make/city), `bike_inspections` (PK bike_id+version, his
 open auctions per bike; the projection sets `active = 0` when the auction ends or is cancelled), plus a
 status/price index on `auctions_rm` for catalogue sorts. Catalogue pages use keyset pagination. Projection = one atomic `DB.batch`; summary rows accept only a
 newer `projection_seq`; bid rows are `INSERT OR IGNORE`. D1 is never read to decide a bid.
+
+`0005` watchlist: `watchlist (user_id → user ON DELETE CASCADE, auction_id → auction_listings, created_at,
+PK (user_id, auction_id))` STRICT, index `(user_id, created_at DESC)`. "Not a draft" is checked in the route
+(it lives in `auctions_rm`). The 100-per-user cap is one atomic `INSERT … SELECT … WHERE count < 100 ON CONFLICT
+DO NOTHING`. "My bids" needs no new table: `user_bids_rm` ⋈ `auctions_rm` ⋈ `auction_listings`, with the newest
+bid seq from `auction_bids_rm` (PK lookup) to decide who leads.

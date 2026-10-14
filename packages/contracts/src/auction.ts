@@ -25,9 +25,24 @@ export const PublicAuctionView = z.strictObject({
   leadingBidder: Pseudonym.nullable(),
   extensionCount: z.number().int().nonnegative(),
   seq: z.number().int().nonnegative(),
-  viewer: z.strictObject({ isLeading: z.boolean(), isWinner: z.boolean() }).nullable(),
+  viewer: z
+    .strictObject({
+      isLeading: z.boolean(),
+      isWinner: z.boolean(),
+      /**
+       * Day 7: the signed-in viewer's OWN hidden maximum (null = none). Personal: only ever present
+       * in views built for that viewer. Optional for clients that build views locally; the server
+       * always sends it.
+       */
+      myMaxMinor: Paise.nullable().optional(),
+    })
+    .nullable(),
 });
 export type PublicAuctionView = z.infer<typeof PublicAuctionView>;
+
+/** MANUAL = placed by the bidder; PROXY = placed automatically from the bidder's hidden maximum. */
+export const BidKind = z.enum(["MANUAL", "PROXY"]);
+export type BidKind = z.infer<typeof BidKind>;
 
 export const PublicAuctionEvent = z.discriminatedUnion("type", [
   z.strictObject({
@@ -43,6 +58,8 @@ export const PublicAuctionEvent = z.discriminatedUnion("type", [
     bidId: z.string(),
     bidder: Pseudonym,
     amountMinor: Paise,
+    /** Day 7 (additive): always sent by the server; optional so older fixtures still parse. */
+    kind: BidKind.optional(),
     at: Ms,
     closesAt: Ms,
     minNextBidMinor: Paise,
@@ -80,6 +97,8 @@ export const PublicBid = z.strictObject({
   bidId: z.string(),
   bidder: Pseudonym,
   amountMinor: Paise,
+  /** Day 7 (additive): always sent by the server. */
+  kind: BidKind.optional(),
   at: Ms,
   isYou: z.boolean(),
 });
@@ -101,3 +120,20 @@ export const PlaceBidResult = z.strictObject({
   minNextBidMinor: Paise,
 });
 export type PlaceBidResult = z.infer<typeof PlaceBidResult>;
+
+/**
+ * PUT /auctions/:id/max-bid body (Day 7). The maximum stays hidden from everyone but its owner.
+ * Like bids, userId and time are never accepted from the client.
+ */
+export const SetMaxBidBody = z.strictObject({ maxMinor: z.number().int().positive() });
+export type SetMaxBidBody = z.infer<typeof SetMaxBidBody>;
+
+/** 200 body of PUT /auctions/:id/max-bid (returned only to the owner of the maximum). */
+export const SetMaxBidResult = z.strictObject({
+  maxMinor: Paise,
+  isLeading: z.boolean(),
+  currentPriceMinor: Paise,
+  minNextBidMinor: Paise,
+  seq: z.number().int().positive(),
+});
+export type SetMaxBidResult = z.infer<typeof SetMaxBidResult>;

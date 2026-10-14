@@ -82,22 +82,22 @@ export function LoginPage() {
 
 function DemoAccounts({ onPick }: { onPick: (a: (typeof DEMO_ACCOUNTS)[number]) => void }) {
   return (
-    <div className="rounded-xl border border-rule bg-paper p-6">
+    <div className="rounded-xl border border-dashed border-control/60 bg-paper/60 p-5 sm:p-6">
       <h2 className="text-lg font-bold">Reviewing the demo?</h2>
       <p className="mt-2 text-sm text-steel">
         Pick an account to fill in the form. Open Buyer A and Buyer B in two browser windows to bid
         against each other.
       </p>
-      <ul className="mt-5 flex flex-col gap-2">
+      <ul className="mt-4 flex flex-col gap-2">
         {DEMO_ACCOUNTS.map((a) => (
           <li key={a.email}>
             <button
               type="button"
               onClick={() => onPick(a)}
-              className="flex w-full items-center justify-between gap-4 rounded-md border border-rule bg-white px-4 py-3 text-left hover:border-asphalt"
+              className="flex min-h-12 w-full min-w-0 items-center justify-between gap-4 rounded-md border border-control/50 bg-field px-4 py-2.5 text-left transition-colors hover:border-asphalt"
             >
-              <span className="font-semibold">{a.label}</span>
-              <span className="truncate text-sm text-steel">{a.email}</span>
+              <span className="shrink-0 font-semibold">{a.label}</span>
+              <span className="min-w-0 truncate text-sm text-steel">{a.email}</span>
             </button>
           </li>
         ))}

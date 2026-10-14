@@ -23,6 +23,10 @@ os.makedirs(OUT, exist_ok=True)
 NOPROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 TAG = f"L{int(time.time()) % 100000}"
 server = None
+# This sandbox cannot reach challenges.cloudflare.com (DNS), so local e2e runs blank the Turnstile secret:
+# the Worker then skips captcha ONLY because ENVIRONMENT=development (it refuses to start without a secret
+# anywhere else; see apps/worker/src/auth/auth.ts). Set E2E_TURNSTILE=1 to keep it on where reachable.
+CAPTCHA_OFF = [] if os.environ.get("E2E_TURNSTILE") == "1" else ["--var", "TURNSTILE_SECRET_KEY:"]
 
 
 def step(msg): print(f"✓ {msg}", flush=True)
@@ -32,7 +36,7 @@ def start_server():
     global server
     env = {**os.environ, "NO_PROXY": "*", "no_proxy": "*"}
     log = open(f"{OUT}/wrangler.log", "a")
-    server = subprocess.Popen(["npx", "wrangler", "dev", "--port", str(PORT), "--ip", "127.0.0.1"],
+    server = subprocess.Popen(["npx", "wrangler", "dev", "--port", str(PORT), "--ip", "127.0.0.1", *CAPTCHA_OFF],
                               cwd=WORKER, stdout=log, stderr=log, env=env, start_new_session=True)
     for _ in range(120):
         try:
@@ -200,15 +204,32 @@ try:
         url2 = f"{BASE}/auctions/{auc2}"
         A.goto(url2); B.goto(url2); live_ok(A); live_ok(B)
         A.locator("#bid-amount").fill("40000"); B.locator("#bid-amount").fill("40000")
+        # Hold both bid requests at the browser until both are issued, then release them together:
+        # truly simultaneous (no live update can refill B's input between the two clicks).
+        held = []
+        hold = lambda route: held.append(route) if route.request.method == "POST" else route.continue_()
+        for pg in (A, B): pg.route("**/api/v1/auctions/*/bids", hold)
         A.get_by_role("button", name=re.compile("^Place bid")).click(no_wait_after=True)
         B.get_by_role("button", name=re.compile("^Place bid")).click(no_wait_after=True)
+        for _ in range(100):
+            if len(held) == 2: break
+            A.wait_for_timeout(50)
+        assert len(held) == 2, f"expected 2 held bid requests, got {len(held)}"
+        for r in held: r.continue_()
+        for pg in (A, B): pg.unroute("**/api/v1/auctions/*/bids")
         expect(A.get_by_test_id("bid-count")).to_have_text("1", timeout=10000)
         expect(B.get_by_test_id("bid-count")).to_have_text("1", timeout=10000)
         a_leads = A.get_by_test_id("leading").count() == 1
         b_leads = B.get_by_test_id("leading").count() == 1
         assert a_leads != b_leads, "exactly one of the simultaneous bids must win"
         loser = B if a_leads else A
-        expect(loser.get_by_text("Someone bid first. The minimum has gone up.")).to_be_visible(timeout=10000)
+        # BLUEPRINT §11.5 copy; the minimum comes from the BID_TOO_LOW problem extension and refills the input.
+        try:
+            expect(loser.get_by_text("Someone just bid. Minimum is now ₹40,500.")).to_be_visible(timeout=10000)
+        except AssertionError:
+            print("DEBUG loser panel:", loser.locator("#live-panel").inner_text()[:1500])
+            raise
+        expect(loser.locator("#bid-amount")).to_have_value("40500")
         step(f"simultaneous ₹40,000 bids: exactly one accepted ({'A' if a_leads else 'B'}), the other told clearly")
         winner = A if a_leads else B
         expect(winner.get_by_test_id("result")).to_be_visible(timeout=70000)
@@ -216,19 +237,66 @@ try:
             expect(pg.get_by_test_id("result")).to_be_visible(timeout=15000)
             expect(pg.locator("#bid-amount")).to_have_count(0)
             assert "-" not in text(pg, "countdown"), text(pg, "countdown")
-        expect(winner.get_by_test_id("result")).to_have_text("You won this auction. Our team will contact you.")
+        expect(winner.get_by_test_id("result")).to_have_text("You won at ₹40,000. Our team will contact you.")
         expect(loser.get_by_test_id("result")).to_contain_text("Sold to Bidder ")
         step("auction closed by the server: SOLD shown to both, winner told, bidding disabled, no negative countdown")
         loser.screenshot(path=f"{OUT}/detail-{'mobile' if loser is B else 'desktop'}-ended.png", full_page=False)
+
+        # 9. Proxy (automatic) bidding, watchlist and My Bids, across the two buyers.
+        auc3 = create_live_auction(admin, f"Avenger {TAG}", 3_600_000, True, 50000)
+        url3 = f"{BASE}/auctions/{auc3}"
+        A.goto(url3); B.goto(url3); live_ok(A); live_ok(B)
+        B.get_by_text("Auto-bid: set a maximum").click()
+        B.locator("#proxy-max").fill("60000")
+        B.get_by_role("button", name="Set maximum").click()
+        expect(B.get_by_test_id("my-max")).to_contain_text("₹60,000", timeout=10000)
+        expect(B.get_by_test_id("leading")).to_be_visible(timeout=10000)  # opening bid placed for B
+        expect(A.get_by_test_id("price")).to_have_text("₹50,000", timeout=10000)
+        bid(A, 50500)  # below B's hidden max → B's proxy answers in the same commit
+        expect(A.get_by_test_id("price")).to_have_text("₹51,000", timeout=10000)
+        expect(A.get_by_test_id("outbid")).to_be_visible(timeout=10000)
+        expect(B.get_by_test_id("price")).to_have_text("₹51,000", timeout=10000)
+        expect(B.get_by_test_id("leading")).to_be_visible()
+        expect(B.get_by_test_id("outbid")).to_have_count(0)  # no false outbid while the proxy defends
+        assert "60,000" not in A.content() and "6000000" not in A.content(), "B's hidden max leaked to A"
+        step("B's auto-bid (max ₹60,000) defended against A's ₹50,500 → ₹51,000; max hidden from A")
+        A.get_by_text("Auto-bid: set a maximum").click()
+        A.locator("#proxy-max").fill("70000")
+        A.get_by_role("button", name="Set maximum").click()
+        expect(A.get_by_test_id("leading")).to_be_visible(timeout=10000)
+        expect(A.get_by_test_id("price")).to_have_text("₹60,500", timeout=10000)  # B's max + one step
+        expect(B.get_by_test_id("outbid")).to_be_visible(timeout=10000)
+        expect(B.get_by_test_id("price")).to_have_text("₹60,500")
+        assert "70,000" not in B.content(), "A's hidden max leaked to B"
+        step("A's higher max (₹70,000) won at ₹60,500 = B's max + increment; B told they were outbid")
+        A.get_by_role("button", name="Watch").first.click()
+        expect(A.get_by_role("button", name="Watching").first).to_be_visible(timeout=10000)
+        A.goto(f"{BASE}/me/watchlist")
+        expect(A.get_by_text(f"Avenger {TAG}").first).to_be_visible(timeout=10000)
+        A.goto(f"{BASE}/me/bids")
+        expect(A.get_by_text(f"Avenger {TAG}").first).to_be_visible(timeout=10000)
+        B.goto(f"{BASE}/me/bids?tab=outbid")
+        expect(B.get_by_text(f"Avenger {TAG}").first).to_be_visible(timeout=10000)
+        A.screenshot(path=f"{OUT}/my-bids-desktop.png", full_page=True)
+        B.screenshot(path=f"{OUT}/my-bids-mobile-outbid.png", full_page=False)
+        step("watchlist and My Bids (Leading for A, Outbid for B) reflect the live auction")
+        A.goto(url3); live_ok(A)
+        A.screenshot(path=f"{OUT}/detail-desktop-proxy.png", full_page=False)
 
         # Mobile layout check: price, countdown and bid button visible without scrolling far; sticky bar.
         B.goto(url); live_ok(B)
         box = B.get_by_test_id("price").bounding_box()
         assert box and box["y"] < 844 * 1.6, box
+        # Specs, inspection and terms are accordions on mobile (collapsed by default).
+        for name in ("Details and documents", "Inspection report", "Auction terms"):
+            toggle = B.get_by_role("button", name=name)
+            expect(toggle).to_have_attribute("aria-expanded", "false")
+            toggle.click()
+            expect(toggle).to_have_attribute("aria-expanded", "true")
         B.mouse.wheel(0, 2500); B.wait_for_timeout(800)
         expect(B.get_by_test_id("mobile-bar")).to_be_visible(timeout=5000)
         B.screenshot(path=f"{OUT}/detail-mobile-bar.png", full_page=False)
-        step("mobile: live panel right after the photos; sticky price bar when scrolled")
+        step("mobile: live panel right after the photos; details in accordions; sticky price bar when scrolled")
         browser.close()
     print("LIVE E2E PASSED")
 finally:

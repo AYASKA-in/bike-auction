@@ -48,7 +48,7 @@ assertion was updated deliberately. Before the first bid, the minimum is exactly
 
 1. resolve time; 2. status LIVE (else AUCTION_CANCELLED / AUCTION_ENDED / AUCTION_NOT_LIVE);
 2. positive safe integer (BID_INVALID_AMOUNT); 4. ≤ per-auction ceiling (BID_UNREASONABLE);
-3. bidder is not already leading (ALREADY_LEADING; proxy bidding is P1); 6. ≥ minimum (BID_TOO_LOW, with
+3. bidder is not already leading (ALREADY_LEADING; see Proxy bidding); 6. ≥ minimum (BID_TOO_LOW, with
    `minNextBidMinor`); 7. ≤ max(minimum, 3 × reference) where reference = current ?? start (BID_UNREASONABLE, with
    `maxAcceptableMinor`). Every accepted bid is strictly higher than the previous, so the highest bid is unique and
    the winner is the leader at close: deterministic, no tie-breaks needed. The UI's ">20% over minimum" confirmation
@@ -82,6 +82,48 @@ server-assigned bidId and time). Same key + same fingerprint → original stored
 no new effects; different fingerprint → IDEMPOTENCY_KEY_REUSED; retention ≥ 24 h, then the record is treated as
 absent. Only deterministic domain outcomes are stored, never infrastructure failures. Storage is the DO's SQLite,
 written in the same transaction as the bid (Day 4). The test harness's in-memory map is explicitly not durable.
+
+## Proxy bidding (Day 7, BLUEPRINT §4.7)
+
+A buyer may set one hidden **maximum** per auction (`setMaxBid {userId, maxMinor}`; `PUT /auctions/:id/max-bid`).
+The engine then bids for them, eBay-style, inside the same pure command. Implemented in `engine.ts`
+(`setMaxBid`, `resolveProxies`), property-tested against an independent closed-form model in
+`test/proxy.property.test.ts`.
+
+- **Priority.** Maxima rank by amount, then by `setSeq` (the auction seq once the command that set that amount
+  committed): on equal maxima the **earlier** one wins. Competing maxima never share a `setSeq` (only the leader can
+  commit a maximum without a bid, and every other maximum that can compete was set in a command that bid);
+  `userId` is a last deterministic tie-break only.
+- **Resolution.** After every bid or maximum the engine resolves until stable (no other maximum can meet the
+  minimum next bid or beat the leader's commitment L = max(price, leader's maximum)). The best challenger C either
+  wins at `min(C, max(minNext, L + inc(L)))` or loses and the leader moves to `min(L, max(minNext, C + inc(C)))`
+  (increment at the _second_ amount). So the price is `min(highest, second + increment(second))`, never above the
+  winner's maximum and never below the minimum next bid at the start of the command. At most two automatic bids per
+  command: the loser's maximum when it is a real step below the final price (this reveals it, as on eBay) and the
+  winner's price. Each is a normal ledger row and `bid.accepted` with `kind: "PROXY"` (manual: `"MANUAL"`).
+  A step may be less than one increment above the previous bid only when capped at the winner's maximum or lifted to
+  the reserve.
+- **Manual bids** keep every check above (incl. `ALREADY_LEADING`: the leader cannot outbid themselves by hand). A
+  manual bid below another's maximum is recorded, then answered in the same commit. A manual bid **equal** to an
+  earlier maximum cannot be recorded and matched (the ledger is strictly increasing), so the maximum takes that amount
+  and the bid is rejected `BID_TOO_LOW` with the new minimum; the automatic bid is still committed.
+- **Raise / lower.** Setting a maximum replaces yours. Checks: LIVE, valid amount, ≤ ceiling, **≥ minimum next bid**
+  (`BID_TOO_LOW`), ≤ fat-finger limit. The leader may raise (no public bid, no price change) or lower, but never below
+  the minimum next bid, so a maximum never drops below current exposure (the price). Re-sending your current maximum
+  is a no-op that keeps priority. There is no delete. No new error code was needed.
+- **Fat-finger.** The 3× rule applies to maxima too (`max ≤ max(minNext, 3 × reference)`, `BID_UNREASONABLE` with
+  `maxAcceptableMinor`): a mistyped maximum is silent until it bites, so it gets the same guard. Users can raise it
+  as the price rises.
+- **Reserve.** If the winning maximum is ≥ the hidden reserve and the computed price is below it, the price jumps to
+  exactly the reserve (also when the leader raises their maximum past it). `reserveMet` is computed from the
+  resulting price as before; a maximum below the reserve never reveals it.
+- **Soft close.** At most one extension per command, emitted after all of its bids, if any bid (manual or automatic)
+  was accepted inside the window. All steps share `now`, so per-step extensions would give the same close. A
+  leader's raise places no bid and never extends.
+- **Privacy.** A maximum is stored only in the DO table `proxy_bids` (stripped from `state_json`), never in events,
+  public views, history, the D1 projection, admin details or logs. Only `viewer.myMaxMinor` in the owner's own view
+  (HTTP or a personal WS snapshot) carries it. Idempotency fingerprint: `max:v1:<auctionId>:<max>`; bid and maximum
+  commands share the (user, key) space and the persistent throttle.
 
 ## Bidder pseudonyms
 

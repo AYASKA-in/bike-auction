@@ -1,30 +1,47 @@
-import {
-  INSPECTION_SECTIONS,
-  PlaceBidResult,
-  type PublicAuctionView,
-  type PublicBike,
-  type PublicBid,
-} from "@bike/contracts";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { INSPECTION_SECTIONS, type PublicBike } from "@bike/contracts";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { Countdown } from "@/components/countdown";
+import { useRef, useState } from "react";
+import { BidHistory } from "@/components/live/bid-history";
+import { Collapsible } from "@/components/live/collapsible";
+import { LiveErrorBoundary, PageError } from "@/components/live/error-boundary";
+import { LivePanel, outbidMinimum } from "@/components/live/live-panel";
+import { outcomeCopy, type AnnounceSnap } from "@/components/live/logic";
+import { MobileBar } from "@/components/live/mobile-bar";
+import { useBidController } from "@/components/live/use-bid-controller";
+import { useAnnouncement, useExtensionChip } from "@/components/live/use-live-signals";
+import { useOutbidAlert } from "@/components/live/use-outbid-alert";
 import { BikePlaceholder, GradeBadge, StatusBadge } from "@/components/status";
-import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { EmptyBayArt } from "@/components/ui/empty-state";
+import { CheckGlyph, ChevronGlyph, MinusGlyph, PinGlyph } from "@/components/ui/icons";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ApiError, apiPost } from "@/lib/api";
-import { BidIntent, bidErrorMessage, checkBid, isUncertain } from "@/lib/bid-intent";
+import { WatchButton } from "@/components/watch-button";
+import { ApiError } from "@/lib/api";
 import { detailsQuery, liveViewQuery } from "@/lib/catalogue";
-import { formatINR, formatIST, formatISTTime, formatKm, ownersLabel } from "@/lib/format";
-import type { ConnStatus, LiveState } from "@/lib/live-auction";
-import { peekFeed, type LiveFeed } from "@/lib/live-feed";
-import { useMe } from "@/lib/session";
+import { formatKm, ownersLabel } from "@/lib/format";
+import { peekFeed } from "@/lib/live-feed";
 import { useLiveAuction } from "@/lib/use-live-auction";
 import { cn } from "@/lib/utils";
 
+/** /auctions/:id — the live auction screen (BLUEPRINT §11.3), wrapped in an error boundary. */
 export function AuctionDetailPage() {
   const { auctionId } = useParams({ from: "/auctions/$auctionId" });
+  const qc = useQueryClient();
+  return (
+    <LiveErrorBoundary
+      key={auctionId}
+      onRetry={() => {
+        void qc.resetQueries({ queryKey: ["details", auctionId] });
+        void qc.resetQueries({ queryKey: ["view", auctionId] });
+      }}
+    >
+      <AuctionDetail auctionId={auctionId} />
+    </LiveErrorBoundary>
+  );
+}
+
+function AuctionDetail({ auctionId }: { auctionId: string }) {
   const details = useQuery(detailsQuery(auctionId));
   // HTTP view: first paint + fallback while the socket is down. No polling while it is healthy.
   const seed = useQuery({
@@ -33,69 +50,144 @@ export function AuctionDetailPage() {
   });
   const { state: live, feed } = useLiveAuction(auctionId, seed.data);
   const panelRef = useRef<HTMLElement>(null);
+  const ctl = useBidController(auctionId, feed);
+  const chip = useExtensionChip(live.view);
+  const outbidMin = outbidMinimum(live, ctl);
+  // A new key per outbid notice (the price that overtook us), so each one vibrates/flashes once.
+  useOutbidAlert(
+    outbidMin !== null ? `${auctionId}:${live.outbid?.currentPriceMinor ?? outbidMin}` : null,
+  );
+  const v = live.view;
+  const snap: AnnounceSnap | null = v
+    ? {
+        auctionId,
+        status: v.status,
+        outcomeHeadline: outcomeCopy(v)?.headline ?? null,
+        outbidMinMinor: outbidMin,
+        extensionCount: v.extensionCount,
+        closesAt: v.closesAt,
+        acceptedBidId: ctl.bid.data?.bidId ?? null,
+        acceptedAmountMinor: ctl.bid.data?.amountMinor ?? null,
+      }
+    : null;
+  const announcement = useAnnouncement(snap);
 
   if (details.isError) {
+    if (details.error instanceof ApiError && details.error.code === "NOT_FOUND") {
+      return (
+        <section className="mx-auto flex max-w-6xl flex-col items-start gap-6 px-4 py-20 sm:px-6">
+          <EmptyBayArt className="w-56" />
+          <div>
+            <h1 className="font-expanded text-3xl font-extrabold tracking-tight">
+              This auction isn't available
+            </h1>
+            <p className="mt-3 text-steel">
+              It may have been withdrawn, or the link is wrong. Other lots are still open.
+            </p>
+          </div>
+          <Button asChild size="lg">
+            <Link to="/auctions">Browse auctions</Link>
+          </Button>
+        </section>
+      );
+    }
     return (
-      <section className="mx-auto max-w-6xl px-4 py-24 sm:px-6">
-        <h1 className="font-expanded text-3xl font-extrabold">This auction isn't available</h1>
-        <p className="mt-3 text-steel">It may have been withdrawn, or the link is wrong.</p>
-        <Link
-          to="/auctions"
-          className="mt-6 inline-block font-semibold underline underline-offset-4"
-        >
-          Browse auctions
-        </Link>
-      </section>
+      <PageError
+        title="We couldn't load this auction"
+        message="Check your connection and try again."
+        error={details.error}
+        onRetry={() => void details.refetch()}
+      />
     );
   }
   const bike = details.data?.bike;
   return (
-    <article className="mx-auto max-w-6xl px-4 pt-8 pb-28 sm:px-6 lg:pb-8">
+    <article className="mx-auto max-w-6xl px-4 pt-5 pb-32 sm:px-6 sm:pt-8 lg:pb-14">
       <nav aria-label="Breadcrumb" className="text-sm text-steel">
-        <Link to="/auctions" className="underline underline-offset-4">
-          Auctions
-        </Link>
+        <ol className="flex min-w-0 items-center gap-1">
+          <li>
+            <Link
+              to="/auctions"
+              className="inline-flex min-h-11 items-center font-semibold underline-offset-4 hover:text-asphalt hover:underline"
+            >
+              Auctions
+            </Link>
+          </li>
+          {details.data && (
+            <li className="flex min-w-0 items-center gap-1">
+              <ChevronGlyph className="size-3.5" />
+              <span aria-current="page" className="truncate">
+                {details.data.title}
+              </span>
+            </li>
+          )}
+        </ol>
       </nav>
       {!details.data ? (
-        <Skeleton className="mt-4 h-10 w-2/3" />
+        <div className="mt-2 space-y-3">
+          <Skeleton className="h-10 w-2/3" />
+          <Skeleton className="h-5 w-1/3" />
+        </div>
       ) : (
-        <header className="mt-3 flex flex-wrap items-center gap-3">
-          <h1 className="font-expanded text-3xl leading-tight font-extrabold tracking-tight sm:text-4xl">
-            {details.data.title}
-          </h1>
-          {live.view && <StatusBadge status={live.view.status} outcome={live.view.outcome} />}
+        <header className="mt-1 flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+          <div className="min-w-0">
+            <h1 className="font-expanded text-[1.75rem] leading-tight font-extrabold tracking-tight text-balance sm:text-4xl">
+              {details.data.title}
+            </h1>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-steel">
+              {v && <StatusBadge status={v.status} outcome={v.outcome} />}
+              {bike && <GradeBadge grade={bike.inspection?.grade ?? null} />}
+              {bike?.repossessed && (
+                <span className="inline-flex items-center rounded-full border border-rule bg-paper px-2.5 py-1 text-xs leading-none font-semibold text-asphalt">
+                  Bank repossessed
+                </span>
+              )}
+              {bike && (
+                <span className="inline-flex items-center gap-1">
+                  <PinGlyph className="size-3.5" />
+                  {bike.yard}, {bike.city}
+                </span>
+              )}
+            </div>
+          </div>
+          {v && v.status !== "CANCELLED" && (
+            <WatchButton auctionId={auctionId} variant="panel" className="sm:w-auto" />
+          )}
         </header>
       )}
 
-      {/* Mobile order: photos → live panel → bids → details. Desktop: panel in a sticky side column. */}
-      <div className="mt-6 grid gap-8 lg:grid-cols-[1fr_24rem]">
+      {/* Mobile order: photos → live panel → bids → details (accordions). Desktop: sticky side panel. */}
+      <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_24rem] lg:gap-8">
         <div className="min-w-0 lg:col-start-1">
           {bike ? (
             <Gallery bike={bike} title={details.data!.title} />
           ) : (
-            <Skeleton className="aspect-[4/3] w-full" />
+            <Skeleton className="aspect-[4/3] w-full rounded-xl" />
           )}
         </div>
         <aside
           ref={panelRef}
           id="live-panel"
           aria-label="Live auction"
-          className="space-y-4 lg:sticky lg:top-6 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-start"
+          className="scroll-mt-20 space-y-4 lg:sticky lg:top-20 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-start"
         >
-          <LivePanel auctionId={auctionId} live={live} feed={feed} />
+          <LivePanel auctionId={auctionId} live={live} feed={feed} ctl={ctl} chip={chip} />
           <BidHistory live={live} feed={feed} />
         </aside>
-        <div className="min-w-0 space-y-8 lg:col-start-1">
-          {bike && <Specs bike={bike} />}
-          {bike && <InspectionReport bike={bike} />}
+        <div className="min-w-0 space-y-3 lg:col-start-1 lg:space-y-5">
+          {bike ? (
+            <>
+              <Specs bike={bike} />
+              <InspectionReport bike={bike} />
+            </>
+          ) : (
+            <div className="space-y-3">
+              <Skeleton className="h-48 w-full rounded-xl" />
+              <Skeleton className="h-40 w-full rounded-xl" />
+            </div>
+          )}
           {details.data && (
-            <section
-              aria-labelledby="terms-h"
-              className="rounded-xl border border-rule bg-paper p-5"
-            >
-              <h2 id="terms-h" className="text-lg font-bold">
-                Auction terms
-              </h2>
+            <Collapsible id="terms" title="Auction terms">
               <p className="mt-2 whitespace-pre-line text-steel">
                 {details.data.terms || "Standard terms apply."}
               </p>
@@ -105,11 +197,15 @@ export function AuctionDetailPage() {
                 </p>
               )}
               {bike && <p className="mt-2 text-sm text-steel">{bike.description}</p>}
-            </section>
+            </Collapsible>
           )}
         </div>
       </div>
-      <MobileBar live={live} panelRef={panelRef} />
+      <MobileBar live={live} ctl={ctl} panelRef={panelRef} />
+      {/* The page's only polite live region: outbid, accepted, extended, ended. Never the clock. */}
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </p>
     </article>
   );
 }
@@ -118,10 +214,15 @@ function Gallery({ bike, title }: { bike: PublicBike; title: string }) {
   const [i, setI] = useState(0);
   const img = bike.images[i];
   if (bike.images.length === 0)
-    return <BikePlaceholder label={title} className="aspect-[4/3] w-full rounded-xl" />;
+    return (
+      <BikePlaceholder
+        label={title}
+        className="aspect-[16/10] w-full rounded-xl border border-rule lg:aspect-[16/11]"
+      />
+    );
   return (
     <div>
-      <div className="aspect-[4/3] overflow-hidden rounded-xl bg-asphalt">
+      <div className="aspect-[4/3] overflow-hidden rounded-xl bg-pit ring-1 ring-rule">
         <img src={img!.url} alt={img!.alt} className="size-full object-contain" />
       </div>
       {bike.images.length > 1 && (
@@ -134,8 +235,8 @@ function Gallery({ bike, title }: { bike: PublicBike; title: string }) {
                 aria-label={`Show photo ${idx + 1}: ${im.alt}`}
                 aria-current={idx === i}
                 className={cn(
-                  "block h-16 w-24 overflow-hidden rounded-md border-2",
-                  idx === i ? "border-hivis" : "border-transparent",
+                  "block h-16 w-24 overflow-hidden rounded-md border-2 transition-opacity",
+                  idx === i ? "border-hivis" : "border-transparent opacity-75 hover:opacity-100",
                 )}
               >
                 <img src={im.url} alt="" className="size-full object-cover" loading="lazy" />
@@ -178,25 +279,21 @@ function Specs({ bike }: { bike: PublicBike }) {
     ["Location", `${bike.yard}, ${bike.city}`],
   ];
   return (
-    <section aria-labelledby="specs-h">
-      <h2 id="specs-h" className="text-lg font-bold">
-        Details and documents
-      </h2>
+    <Collapsible id="specs" title="Details and documents">
       {bike.repossessed && (
-        <p className="mt-2 text-sm font-semibold">Bank or lender repossessed vehicle.</p>
+        <p className="mt-2 rounded-md bg-concrete px-3 py-2 text-sm font-semibold">
+          Bank or lender repossessed vehicle.
+        </p>
       )}
-      <dl className="mt-3 grid overflow-hidden rounded-xl border border-rule bg-paper sm:grid-cols-2">
+      <dl className="mt-2 grid sm:grid-cols-2 sm:gap-x-6">
         {rows.map(([k, v]) => (
-          <div
-            key={k}
-            className="flex justify-between gap-4 border-b border-rule px-4 py-3 text-sm sm:odd:border-r"
-          >
+          <div key={k} className="flex justify-between gap-4 border-b border-rule py-2.5 text-sm">
             <dt className="text-steel">{k}</dt>
             <dd className="text-right font-semibold">{v}</dd>
           </div>
         ))}
       </dl>
-    </section>
+    </Collapsible>
   );
 }
 
@@ -215,13 +312,11 @@ const SECTION_LABEL: Record<string, string> = {
 function InspectionReport({ bike }: { bike: PublicBike }) {
   const r = bike.inspection;
   return (
-    <section aria-labelledby="insp-h" className="rounded-xl border border-rule bg-paper p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="insp-h" className="text-lg font-bold">
-          Inspection report
-        </h2>
-        <GradeBadge grade={r?.grade ?? null} />
-      </div>
+    <Collapsible
+      id="insp"
+      title="Inspection report"
+      aside={<GradeBadge grade={r?.grade ?? null} />}
+    >
       {!r ? (
         <p className="mt-2 text-steel">This bike hasn't been inspected yet.</p>
       ) : (
@@ -230,17 +325,17 @@ function InspectionReport({ bike }: { bike: PublicBike }) {
             Inspected by {r.inspectorName} on{" "}
             {new Date(r.inspectedAt).toLocaleDateString("en-IN", { dateStyle: "medium" })}
           </p>
-          <ul className="mt-4 grid gap-2 sm:grid-cols-3">
+          <ul className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {INSPECTION_SECTIONS.map((k) => {
               const s = r.sections[k];
               if (!s) return null;
               return (
-                <li key={k} className="rounded-md border border-rule px-3 py-2">
+                <li key={k} className="rounded-lg border border-rule bg-concrete/50 px-3 py-2.5">
                   <div className="flex items-center justify-between gap-2 text-sm">
                     <span className="font-semibold">{SECTION_LABEL[k]}</span>
                     <span
                       className={cn(
-                        "text-xs font-bold",
+                        "inline-flex items-center gap-1 text-xs font-bold",
                         s.condition === "GOOD"
                           ? "text-ledger"
                           : s.condition === "FAIR"
@@ -248,6 +343,13 @@ function InspectionReport({ bike }: { bike: PublicBike }) {
                             : "text-danger",
                       )}
                     >
+                      {s.condition === "GOOD" ? (
+                        <CheckGlyph className="size-3.5" />
+                      ) : s.condition === "FAIR" ? (
+                        <MinusGlyph className="size-3.5" />
+                      ) : (
+                        <WarnGlyph />
+                      )}
                       {s.condition === "GOOD" ? "Good" : s.condition === "FAIR" ? "Fair" : "Poor"}
                     </span>
                   </div>
@@ -270,498 +372,21 @@ function InspectionReport({ bike }: { bike: PublicBike }) {
           )}
         </>
       )}
-    </section>
+    </Collapsible>
   );
 }
 
-const CONN_COPY: Record<ConnStatus, { label: string; note?: string; dot: string }> = {
-  connecting: { label: "Connecting…", dot: "animate-pulse bg-paper/50" },
-  live: { label: "Live updates connected", dot: "bg-ledger" },
-  stale: {
-    label: "Catching up…",
-    note: "Some updates were missed. Refreshing from the server.",
-    dot: "animate-pulse bg-amber",
-  },
-  reconnecting: {
-    label: "Reconnecting…",
-    note: "Connection lost. Figures below may be out of date.",
-    dot: "animate-pulse bg-amber",
-  },
-  offline: {
-    label: "Offline",
-    note: "You're offline. Figures below may be out of date; bidding is paused.",
-    dot: "bg-danger",
-  },
-  failed: {
-    label: "Connection failed",
-    note: "We can't reach the live feed. Figures may be out of date.",
-    dot: "bg-danger",
-  },
-};
-
-function ConnectionIndicator({ live, feed }: { live: LiveState; feed: LiveFeed | null }) {
-  const c = CONN_COPY[live.status];
+function WarnGlyph() {
   return (
-    <div className="text-xs">
-      <p role="status" className="inline-flex items-center gap-2" data-conn={live.status}>
-        <span aria-hidden="true" className={cn("size-2 rounded-full", c.dot)} />
-        {c.label}
-      </p>
-      {c.note && live.view && (
-        <p className="mt-1 text-paper/70">
-          {c.note}
-          {live.syncedAt !== null && <> Last updated {formatISTTime(live.syncedAt)}.</>}
-          {(live.status === "failed" || live.status === "reconnecting") && feed && (
-            <button
-              type="button"
-              onClick={() => feed.retryNow()}
-              className="ml-2 font-semibold underline underline-offset-2"
-            >
-              Retry now
-            </button>
-          )}
-        </p>
-      )}
-    </div>
-  );
-}
-
-const RESULT: Record<NonNullable<PublicAuctionView["outcome"]>, string> = {
-  SOLD: "Sold",
-  RESERVE_NOT_MET: "Reserve not met. Not sold.",
-  NO_BIDS: "Ended with no bids.",
-};
-
-function LivePanel({
-  auctionId,
-  live,
-  feed,
-}: {
-  auctionId: string;
-  live: LiveState;
-  feed: LiveFeed | null;
-}) {
-  const view = live.view;
-  if (!view) return <Skeleton className="h-80 w-full rounded-xl" />;
-  const stale = live.status !== "live";
-  const priceLabel =
-    view.status === "ENDED"
-      ? view.outcome === "SOLD"
-        ? "Sold for"
-        : view.currentPriceMinor === null
-          ? "Starting bid"
-          : "Highest bid"
-      : view.currentPriceMinor === null
-        ? "Starting bid"
-        : "Current bid";
-  const leading = view.viewer?.isLeading === true && view.status === "LIVE";
-  return (
-    <section className="rounded-xl bg-asphalt p-5 text-paper" aria-labelledby="price-h">
-      <ConnectionIndicator live={live} feed={feed} />
-      {leading && !stale && (
-        <p
-          role="status"
-          data-testid="leading"
-          className="mt-3 rounded-md bg-ledger px-3 py-2 font-bold"
-        >
-          You're leading
-        </p>
-      )}
-      {leading && stale && (
-        <p
-          data-testid="leading-unconfirmed"
-          className="mt-3 rounded-md bg-asphalt-2 px-3 py-2 text-sm"
-        >
-          You were leading at the last update. Reconnecting to confirm…
-        </p>
-      )}
-      {live.outbid && !leading && view.status === "LIVE" && (
-        <p
-          role="alert"
-          data-testid="outbid"
-          className="mt-3 rounded-md bg-hivis px-3 py-2 font-bold text-white"
-        >
-          You've been outbid. New minimum{" "}
-          {formatINR(view.minNextBidMinor ?? live.outbid.minNextBidMinor)}.
-        </p>
-      )}
-      <p id="price-h" className="mt-3 text-sm font-semibold text-paper/80">
-        {priceLabel}
-        {stale && <span className="ml-2 text-xs font-normal text-amber">(may be outdated)</span>}
-      </p>
-      <p
-        data-testid="price"
-        className={cn("font-expanded text-4xl font-extrabold tnum", stale && "opacity-70")}
-      >
-        {formatINR(view.currentPriceMinor ?? view.startPriceMinor)}
-      </p>
-      <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-        <div>
-          <dt className="text-paper/60">Bids</dt>
-          <dd data-testid="bid-count" className="font-semibold tnum">
-            {view.bidCount}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-paper/60">Reserve</dt>
-          <dd className="font-semibold">
-            {!view.hasReserve ? "No reserve" : view.reserveMet ? "Reserve met" : "Reserve not met"}
-          </dd>
-        </div>
-        {view.status === "LIVE" && view.minNextBidMinor !== null && (
-          <div>
-            <dt className="text-paper/60">Minimum next bid</dt>
-            <dd data-testid="min-next" className="font-semibold tnum">
-              {formatINR(view.minNextBidMinor)}
-            </dd>
-          </div>
-        )}
-        {view.leadingBidder && view.status !== "CANCELLED" && (
-          <div>
-            <dt className="text-paper/60">{view.status === "ENDED" ? "Winner" : "Leading"}</dt>
-            <dd data-testid="leader" className="font-semibold">
-              {view.status === "ENDED" && view.outcome !== "SOLD"
-                ? "No winner"
-                : view.viewer?.isLeading || view.viewer?.isWinner
-                  ? `You (${view.leadingBidder})`
-                  : view.leadingBidder}
-            </dd>
-          </div>
-        )}
-        <div>
-          <dt className="text-paper/60">Starts</dt>
-          <dd className="font-semibold">{formatIST(view.startsAt)}</dd>
-        </div>
-        <div>
-          <dt className="text-paper/60">{view.status === "ENDED" ? "Closed" : "Closes"}</dt>
-          <dd data-testid="closes" data-ms={view.closesAt} className="font-semibold">
-            {formatIST(view.closesAt)}
-          </dd>
-        </div>
-      </dl>
-      <p
-        data-testid="countdown"
-        className="mt-4 rounded-md bg-asphalt-2 px-3 py-2 text-center font-expanded text-lg font-bold"
-      >
-        <Countdown full status={view.status} startsAt={view.startsAt} closesAt={view.closesAt} />
-      </p>
-      {view.extensionCount > 0 && view.status === "LIVE" && (
-        <p className="mt-2 text-xs text-paper/70" data-testid="extended">
-          Extended {view.extensionCount}× by late bids (anti-sniping).
-        </p>
-      )}
-      {view.status === "LIVE" && (
-        <BidForm auctionId={auctionId} view={view} feed={feed} paused={stale} />
-      )}
-      {view.status === "ENDED" && view.outcome && (
-        <p data-testid="result" className="mt-4 rounded-md bg-asphalt-2 px-3 py-2 font-semibold">
-          {view.outcome === "SOLD"
-            ? view.viewer?.isWinner
-              ? "You won this auction. Our team will contact you."
-              : `Sold to ${view.leadingBidder ?? "the highest bidder"}.`
-            : RESULT[view.outcome]}
-        </p>
-      )}
-      {view.status === "CANCELLED" && (
-        <p data-testid="result" className="mt-4 rounded-md bg-asphalt-2 px-3 py-2 font-semibold">
-          This auction was cancelled. No sale will take place.
-        </p>
-      )}
-    </section>
-  );
-}
-
-/** Bid form. Success is shown only after the server's 201; a timeout never places a new bid. */
-function BidForm({
-  auctionId,
-  view,
-  feed,
-  paused,
-}: {
-  auctionId: string;
-  view: PublicAuctionView;
-  feed: LiveFeed | null;
-  paused: boolean;
-}) {
-  const me = useMe();
-  const qc = useQueryClient();
-  const min = view.minNextBidMinor ?? view.startPriceMinor;
-  const [rupees, setRupees] = useState(String(min / 100));
-  const [confirming, setConfirming] = useState<number | null>(null);
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [intent] = useState(() => new BidIntent());
-  const lastMin = useRef(min);
-  useEffect(() => {
-    if (min !== lastMin.current) {
-      lastMin.current = min;
-      setRupees(String(min / 100));
-      setConfirming(null);
-    }
-  }, [min]);
-  const bid = useMutation({
-    mutationFn: (amountMinor: number) =>
-      apiPost(
-        `/auctions/${auctionId}/bids`,
-        { amountMinor },
-        (x) => PlaceBidResult.parse(x),
-        { "idempotency-key": intent.keyFor(amountMinor) },
-        15_000,
-      ),
-    retry: false, // never automatic: an uncertain failure is retried only by the user, same key
-    onSuccess: (r) => {
-      intent.settle(null);
-      feed?.noteOwnBid(r);
-      void qc.invalidateQueries({ queryKey: ["view", auctionId] });
-    },
-    onError: (e) => {
-      intent.settle(e);
-      if (e instanceof ApiError && e.code === "AUTH_REQUIRED")
-        void qc.invalidateQueries({ queryKey: ["me"] });
-      if (!isUncertain(e)) void qc.invalidateQueries({ queryKey: ["view", auctionId] });
-    },
-  });
-  if (!me.data) {
-    return (
-      <div className="mt-4 space-y-2">
-        {bid.error instanceof ApiError && bid.error.code === "AUTH_REQUIRED" && (
-          <Alert>Your session has expired. Sign in again to bid.</Alert>
-        )}
-        <Link
-          to="/login"
-          search={{ redirect: `/auctions/${auctionId}` }}
-          className="block rounded-md bg-hivis px-4 py-3 text-center font-semibold text-white"
-        >
-          Sign in to bid
-        </Link>
-      </div>
-    );
-  }
-  if (me.data.role === "ADMIN")
-    return <p className="mt-4 text-sm text-paper/70">Administrators can't bid.</p>;
-
-  const send = (amountMinor: number) => {
-    setConfirming(null);
-    bid.mutate(amountMinor);
-  };
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (bid.isPending) return;
-    const c = checkBid(rupees, min);
-    if (!c.ok) {
-      setLocalError(c.message);
-      return;
-    }
-    setLocalError(null);
-    if (c.needsConfirm && confirming !== c.amountMinor) {
-      setConfirming(c.amountMinor);
-      return;
-    }
-    send(c.amountMinor);
-  };
-  const retryAmount = bid.isError && isUncertain(bid.error) ? intent.pendingRetryAmount : null;
-  const leading = view.viewer?.isLeading === true;
-  return (
-    <form onSubmit={submit} className="mt-4 space-y-3" noValidate>
-      <label className="block text-sm font-semibold" htmlFor="bid-amount">
-        Your bid in ₹ (minimum {formatINR(min)})
-      </label>
-      <div className="flex gap-2">
-        <input
-          id="bid-amount"
-          inputMode="numeric"
-          autoComplete="off"
-          value={rupees}
-          aria-invalid={localError !== null}
-          aria-describedby={localError ? "bid-error" : undefined}
-          onChange={(e) => {
-            setRupees(e.target.value.replace(/[^\d]/g, ""));
-            setConfirming(null);
-            setLocalError(null);
-          }}
-          className="h-14 w-full min-w-0 rounded-md bg-paper px-3 font-expanded text-xl font-bold text-asphalt tnum"
-        />
-        <button
-          type="button"
-          onClick={() => setRupees(String(min / 100))}
-          className="shrink-0 rounded-md border border-paper/30 px-3 text-sm font-semibold"
-        >
-          Min
-        </button>
-      </div>
-      {localError && (
-        <p id="bid-error" className="text-sm font-semibold text-amber">
-          {localError}
-        </p>
-      )}
-      {confirming !== null ? (
-        <div
-          role="alertdialog"
-          aria-label="Confirm large bid"
-          className="space-y-2 rounded-md bg-asphalt-2 p-3"
-        >
-          <p className="text-sm">
-            {formatINR(confirming)} is well above the minimum ({formatINR(min)}). Place this bid?
-          </p>
-          <div className="flex gap-2">
-            <Button type="button" size="lg" className="flex-1" onClick={() => send(confirming)}>
-              Yes, bid {formatINR(confirming)}
-            </Button>
-            <Button
-              type="button"
-              size="lg"
-              variant="ghost"
-              className="flex-1 bg-paper text-asphalt"
-              onClick={() => setConfirming(null)}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <Button
-          type="submit"
-          size="lg"
-          className="h-14 w-full text-lg"
-          disabled={paused || bid.isPending || leading}
-        >
-          {bid.isPending
-            ? "Placing bid…"
-            : leading
-              ? "You have the highest bid"
-              : paused
-                ? "Bidding paused while reconnecting"
-                : `Place bid ${formatINR(Number(rupees || 0) * 100)}`}
-        </Button>
-      )}
-      {bid.isError && (
-        <Alert>
-          {bidErrorMessage(bid.error)}
-          {retryAmount !== null && (
-            <button
-              type="button"
-              className="ml-2 font-semibold underline underline-offset-2"
-              onClick={() => bid.mutate(retryAmount)}
-            >
-              Retry {formatINR(retryAmount)}
-            </button>
-          )}
-        </Alert>
-      )}
-      {bid.isSuccess && !bid.isPending && (
-        <p className="text-sm text-paper/80" role="status" data-testid="bid-confirmed">
-          Bid of {formatINR(bid.data.amountMinor)} accepted.
-        </p>
-      )}
-    </form>
-  );
-}
-
-function BidHistory({ live, feed }: { live: LiveState; feed: LiveFeed | null }) {
-  const [loading, setLoading] = useState(false);
-  if (!live.view || live.view.bidCount === 0) return null;
-  const more = live.olderCursor !== null && live.olderCursor !== undefined;
-  return (
-    <section aria-labelledby="bids-h" className="rounded-xl border border-rule bg-paper p-4">
-      <h2 id="bids-h" className="text-base font-bold">
-        Recent bids
-      </h2>
-      {live.bids.length === 0 ? (
-        <p className="mt-2 text-sm text-steel">Loading bids…</p>
-      ) : (
-        <ol className="mt-2 divide-y divide-rule text-sm" data-testid="bid-history">
-          {live.bids.map((b: PublicBid, i) => (
-            <li
-              key={b.seq}
-              data-seq={b.seq}
-              className={cn(
-                "flex items-center justify-between gap-3 py-2",
-                i === 0 && "font-semibold",
-              )}
-            >
-              <span>
-                {b.bidder}
-                {b.isYou && (
-                  <span className="ml-2 rounded bg-ledger/15 px-1.5 py-0.5 text-xs font-bold text-ledger">
-                    You
-                  </span>
-                )}
-              </span>
-              <span className="text-right">
-                <span className="tnum">{formatINR(b.amountMinor)}</span>
-                <span className="block text-xs font-normal text-steel tnum">
-                  {formatISTTime(b.at)}
-                </span>
-              </span>
-            </li>
-          ))}
-        </ol>
-      )}
-      {more && (
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => {
-            setLoading(true);
-            void feed?.loadOlder().finally(() => setLoading(false));
-          }}
-          className="mt-2 text-sm font-semibold underline underline-offset-4"
-        >
-          {loading ? "Loading…" : "Load older bids"}
-        </button>
-      )}
-    </section>
-  );
-}
-
-/** Mobile: price, countdown and a jump-to-bid button stay visible while reading the details. */
-function MobileBar({
-  live,
-  panelRef,
-}: {
-  live: LiveState;
-  panelRef: React.RefObject<HTMLElement | null>;
-}) {
-  const [panelVisible, setPanelVisible] = useState(true);
-  const hasView = live.view !== null;
-  useEffect(() => {
-    const el = panelRef.current;
-    if (!el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(([e]) => setPanelVisible(e?.isIntersecting ?? true));
-    io.observe(el);
-    return () => io.disconnect();
-  }, [panelRef, hasView]);
-  const jump = useCallback(() => {
-    panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [panelRef]);
-  const v = live.view;
-  if (!v || panelVisible) return null;
-  const leading = v.viewer?.isLeading === true && v.status === "LIVE";
-  return (
-    <div
-      data-testid="mobile-bar"
-      className="fixed inset-x-0 bottom-0 z-20 border-t border-asphalt-2 bg-asphalt px-4 py-3 text-paper lg:hidden"
-    >
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="font-expanded text-xl font-extrabold tnum">
-            {formatINR(v.currentPriceMinor ?? v.startPriceMinor)}
-            {live.status !== "live" && (
-              <span className="ml-2 text-xs font-normal text-amber">may be outdated</span>
-            )}
-          </p>
-          <p className="truncate text-xs text-paper/80">
-            {leading && live.status === "live"
-              ? "You're leading · "
-              : live.outbid && v.status === "LIVE"
-                ? "Outbid · "
-                : ""}
-            <Countdown full status={v.status} startsAt={v.startsAt} closesAt={v.closesAt} />
-          </p>
-        </div>
-        <Button type="button" size="lg" onClick={jump} className="shrink-0">
-          {v.status === "LIVE" ? "Bid" : "View"}
-        </Button>
-      </div>
-    </div>
+    <svg viewBox="0 0 20 20" aria-hidden="true" className="size-3.5 shrink-0">
+      <path
+        d="M10 2.5l8.5 15h-17z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path d="M10 8v4.5M10 15v.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
   );
 }

@@ -213,6 +213,7 @@ export type ListStatus = z.infer<typeof ListStatus>;
 export const ListSort = z.enum([
   "ending_soon",
   "starting_soon",
+  "recently_ended",
   "price_asc",
   "price_desc",
   "newest",

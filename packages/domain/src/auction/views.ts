@@ -1,7 +1,7 @@
 import type { Paise } from "../money";
 import { isReserveMet, minNextBidFor } from "./engine";
 import type { AuctionEvent } from "./events";
-import type { AuctionOutcome, AuctionState, AuctionStatus } from "./types";
+import type { AuctionOutcome, AuctionState, AuctionStatus, BidKind } from "./types";
 
 /**
  * Buyer-facing representations. Built field by field (an allow-list), never by spreading internal
@@ -22,7 +22,16 @@ export interface PublicAuctionView {
   readonly leadingBidder: string | null;
   readonly extensionCount: number;
   readonly seq: number;
-  readonly viewer: { readonly isLeading: boolean; readonly isWinner: boolean } | null;
+  /**
+   * Personal fields for the signed-in viewer. `myMaxMinor` is the viewer's OWN hidden maximum
+   * (null if none); it is never derived for anyone else, and views for anonymous viewers or
+   * projections (viewerUserId = null) carry no viewer object at all.
+   */
+  readonly viewer: {
+    readonly isLeading: boolean;
+    readonly isWinner: boolean;
+    readonly myMaxMinor: Paise | null;
+  } | null;
 }
 
 export function toPublicView(
@@ -52,6 +61,7 @@ export function toPublicView(
         : {
             isLeading: leading && state.status === "LIVE",
             isWinner: state.winnerUserId === opts.viewerUserId,
+            myMaxMinor: state.proxies.find((p) => p.userId === opts.viewerUserId)?.maxMinor ?? null,
           },
   };
 }
@@ -70,6 +80,7 @@ export type PublicAuctionEvent =
       readonly bidId: string;
       readonly bidder: string;
       readonly amountMinor: Paise;
+      readonly kind: BidKind;
       readonly at: number;
       readonly closesAt: number;
       readonly minNextBidMinor: Paise;
@@ -119,6 +130,8 @@ export function toPublicEvent(
         bidId: event.bidId,
         bidder: pseudonymOf(event.userId),
         amountMinor: event.amountMinor,
+        // Events committed before Day 7 carry no kind: they were all manual.
+        kind: event.kind ?? "MANUAL",
         at: event.at,
         closesAt: event.closesAt,
         minNextBidMinor: event.minNextBidMinor,

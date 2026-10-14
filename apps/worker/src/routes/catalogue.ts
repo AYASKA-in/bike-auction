@@ -57,6 +57,7 @@ const PRICE = `COALESCE(r.current_price_minor, r.start_price_minor)`;
 const SORTS: Record<ListSort, { expr: string; dir: "ASC" | "DESC" }> = {
   ending_soon: { expr: "r.closes_at", dir: "ASC" },
   starting_soon: { expr: "r.starts_at", dir: "ASC" },
+  recently_ended: { expr: "r.closes_at", dir: "DESC" },
   price_asc: { expr: PRICE, dir: "ASC" },
   price_desc: { expr: PRICE, dir: "DESC" },
   newest: { expr: "l.created_at", dir: "DESC" },
@@ -65,7 +66,7 @@ const DEFAULT_SORT: Record<ListStatus, ListSort> = {
   ACTIVE: "ending_soon",
   LIVE: "ending_soon",
   UPCOMING: "starting_soon",
-  ENDED: "newest",
+  ENDED: "recently_ended",
 };
 
 // Keyset cursor: [sortValue, auctionId, sort] (base64url). Bound to its sort so it can't be misused.

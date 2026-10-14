@@ -29,9 +29,28 @@ export interface AuctionRules {
   readonly limits: BidLimits;
 }
 
+/** How an accepted bid was placed: by the bidder directly, or automatically by their maximum. */
+export type BidKind = "MANUAL" | "PROXY";
+
+/**
+ * A bidder's hidden maximum (proxy bid, BLUEPRINT §4.7). PRIVATE: only its owner may ever see
+ * `maxMinor`. At most one per user per auction; setting a new one replaces it.
+ */
+export interface ProxyBid {
+  readonly userId: string;
+  readonly maxMinor: Paise;
+  /**
+   * Priority for equal maxima (lower wins): the auction seq once the command that set this maximum
+   * committed. Unique among competing maxima (see ADR 004 › Proxy bidding).
+   */
+  readonly setSeq: number;
+  readonly updatedAt: number;
+}
+
 /**
  * Authoritative auction state. Immutable: every command returns a new object.
- * Contains private fields (reserve, user ids); NEVER serialise it to clients. Use toPublicView().
+ * Contains private fields (reserve, user ids, proxy maxima); NEVER serialise it to clients. Use
+ * toPublicView().
  */
 export interface AuctionState {
   readonly auctionId: string;
@@ -60,4 +79,6 @@ export interface AuctionState {
   readonly endedAt: number | null;
   readonly cancelledAt: number | null;
   readonly cancelReason: string | null;
+  /** Hidden maxima, one per user (PRIVATE). Never part of any public view or event. */
+  readonly proxies: readonly ProxyBid[];
 }

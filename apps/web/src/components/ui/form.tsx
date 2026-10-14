@@ -1,8 +1,48 @@
 import { useId, type ComponentProps, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-const control =
-  "w-full rounded-md border border-steel/40 bg-white px-3 text-base outline-none transition-colors focus:border-asphalt aria-invalid:border-danger";
+/** Shared look for text inputs, selects and textareas (focus ring comes from :focus-visible). */
+export const controlClass = cn(
+  "w-full min-w-0 rounded-md border border-control/70 bg-field px-3 text-base text-asphalt shadow-[inset_0_1px_2px_#0000000d] outline-none transition-colors",
+  "placeholder:text-steel/80 hover:border-control focus:border-asphalt",
+  "aria-invalid:border-danger aria-invalid:bg-danger/5",
+  "disabled:cursor-not-allowed disabled:opacity-60",
+);
+
+/** Hint or error under a control; the error carries an icon so it never relies on colour. */
+export function FieldMessage({
+  id,
+  error,
+  hint,
+}: {
+  id: string;
+  error?: string | undefined;
+  hint?: string | undefined;
+}) {
+  return (
+    <>
+      {hint && !error && (
+        <p id={`${id}-hint`} className="text-sm text-steel">
+          {hint}
+        </p>
+      )}
+      {error && (
+        <p id={`${id}-err`} className="flex items-start gap-1.5 text-sm font-medium text-danger">
+          <svg viewBox="0 0 20 20" className="mt-0.5 size-4 shrink-0" aria-hidden="true">
+            <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" />
+            <path
+              d="M10 6v5M10 13.5v.5"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
 
 function Wrap({
   id,
@@ -23,16 +63,7 @@ function Wrap({
         {label}
       </label>
       {children}
-      {hint && !error && (
-        <p id={`${id}-hint`} className="text-sm text-steel">
-          {hint}
-        </p>
-      )}
-      {error && (
-        <p id={`${id}-err`} className="text-sm font-medium text-danger">
-          {error}
-        </p>
-      )}
+      <FieldMessage id={id} error={error} hint={hint} />
     </div>
   );
 }
@@ -50,15 +81,31 @@ export function SelectField({
   const id = useId();
   return (
     <Wrap id={id} label={label} error={error} hint={hint}>
-      <select
-        id={id}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={error ? `${id}-err` : hint ? `${id}-hint` : undefined}
-        className={cn(control, "h-11", className)}
-        {...props}
-      >
-        {children}
-      </select>
+      <div className="relative">
+        <select
+          id={id}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-err` : hint ? `${id}-hint` : undefined}
+          className={cn(controlClass, "h-11 cursor-pointer appearance-none pr-10", className)}
+          {...props}
+        >
+          {children}
+        </select>
+        <svg
+          viewBox="0 0 20 20"
+          aria-hidden="true"
+          className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-steel"
+        >
+          <path
+            d="M5.5 8l4.5 4.5L14.5 8"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </div>
     </Wrap>
   );
 }
@@ -78,7 +125,7 @@ export function TextAreaField({
         rows={3}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? `${id}-err` : hint ? `${id}-hint` : undefined}
-        className={cn(control, "py-2", className)}
+        className={cn(controlClass, "py-2", className)}
         {...props}
       />
     </Wrap>
@@ -93,7 +140,7 @@ export function CheckboxField({
   const id = useId();
   return (
     <div className="flex items-start gap-3">
-      <input id={id} type="checkbox" className="mt-1 size-5 accent-hivis" {...props} />
+      <input id={id} type="checkbox" className="mt-0.5 size-5 shrink-0 accent-hivis" {...props} />
       <div>
         <label htmlFor={id} className="font-semibold">
           {label}

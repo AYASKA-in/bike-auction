@@ -9,6 +9,8 @@ import {
 import { z } from "zod";
 import { AppShell } from "./components/app-shell";
 import { CatalogueSearch } from "./lib/catalogue-search";
+import { MyBidsSearch } from "./lib/me";
+import { AuditSearch } from "./lib/ops";
 import { meQuery } from "./lib/session";
 import { HomePage } from "./routes/home";
 import { NotFoundPage } from "./routes/not-found";
@@ -66,6 +68,46 @@ const auctionDetailRoute = createRoute({
   component: lazyRouteComponent(() => import("./routes/auction-detail"), "AuctionDetailPage"),
 });
 
+// Buyer pages. UX guard only: the API independently returns 401/403 (test/me.test.ts).
+const meRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/me",
+  beforeLoad: async ({ context, location }) => {
+    const me = await context.queryClient.ensureQueryData(meQuery);
+    if (!me) throw redirect({ to: "/login", search: { redirect: location.href } });
+    if (me.role === "ADMIN") throw redirect({ to: "/admin" });
+  },
+});
+const myBidsRoute = createRoute({
+  getParentRoute: () => meRoute,
+  path: "/bids",
+  validateSearch: MyBidsSearch,
+  component: lazyRouteComponent(() => import("./routes/my-bids"), "MyBidsPage"),
+});
+const watchlistRoute = createRoute({
+  getParentRoute: () => meRoute,
+  path: "/watchlist",
+  component: lazyRouteComponent(() => import("./routes/watchlist"), "WatchlistPage"),
+});
+
+// Account & privacy (any signed-in user, admins included). UX guard only: the API independently
+// returns 401 (test/privacy.test.ts).
+const accountRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/account",
+  beforeLoad: async ({ context, location }) => {
+    const me = await context.queryClient.ensureQueryData(meQuery);
+    if (!me) throw redirect({ to: "/login", search: { redirect: location.href } });
+  },
+  component: lazyRouteComponent(() => import("./routes/account"), "AccountPage"),
+});
+// Public Privacy Notice, linked from the sign-up consent checkbox.
+const privacyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/privacy",
+  component: lazyRouteComponent(() => import("./routes/account"), "PrivacyPage"),
+});
+
 // UX guard only; the API enforces roles independently (test/authz.test.ts).
 const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -97,6 +139,24 @@ const adminBikeRoute = createRoute({
   component: lazyRouteComponent(() => import("./routes/admin-bike-edit"), "AdminBikeEditPage"),
 });
 
+// Day 8: admin observability (live ops, audit trail, per-auction ops).
+const adminOpsRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "/ops",
+  component: lazyRouteComponent(() => import("./routes/admin-ops"), "AdminOpsPage"),
+});
+const adminAuditRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "/audit",
+  validateSearch: AuditSearch,
+  component: lazyRouteComponent(() => import("./routes/admin-audit"), "AdminAuditPage"),
+});
+const adminAuctionRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "/auctions/$auctionId",
+  component: lazyRouteComponent(() => import("./routes/admin-auction"), "AdminAuctionPage"),
+});
+
 export function createAppRouter(queryClient: QueryClient) {
   return createRouter({
     routeTree: rootRoute.addChildren([
@@ -105,7 +165,18 @@ export function createAppRouter(queryClient: QueryClient) {
       registerRoute,
       auctionsRoute,
       auctionDetailRoute,
-      adminRoute.addChildren([adminIndexRoute, adminBikesRoute, adminBikeNewRoute, adminBikeRoute]),
+      meRoute.addChildren([myBidsRoute, watchlistRoute]),
+      accountRoute,
+      privacyRoute,
+      adminRoute.addChildren([
+        adminIndexRoute,
+        adminBikesRoute,
+        adminBikeNewRoute,
+        adminBikeRoute,
+        adminOpsRoute,
+        adminAuditRoute,
+        adminAuctionRoute,
+      ]),
     ]),
     context: { queryClient },
     defaultPreload: "intent",

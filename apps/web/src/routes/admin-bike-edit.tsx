@@ -8,20 +8,35 @@ import {
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { AuctionCard } from "@/components/auction-card";
 import { StatusBadge } from "@/components/status";
-import { Alert } from "@/components/ui/alert";
+import { Alert, Callout } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { LoadError } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { CheckboxField, SelectField, TextAreaField } from "@/components/ui/form";
+import { Card as Panel, PageHeader, SuccessNote } from "@/components/ui/page";
 import { Skeleton } from "@/components/ui/skeleton";
 import { adminAuctionQuery, adminBikeQuery } from "@/lib/admin";
 import { ApiError, apiSend, apiUpload } from "@/lib/api";
 import { formatINR, formatIST, isoToIstLocal, istLocalToIso, rupeesToPaise } from "@/lib/format";
 import { preparePhoto } from "@/lib/image-prep";
 import { authErrorMessage } from "@/lib/session";
+import { cn } from "@/lib/utils";
+import { AdminNav } from "./admin-ops";
+
+function BackToBikes() {
+  return (
+    <Link
+      to="/admin/bikes"
+      className="inline-flex min-h-11 items-center font-semibold underline-offset-4 hover:text-asphalt hover:underline"
+    >
+      Motorcycles
+    </Link>
+  );
+}
 
 const asNum = (v: unknown) => (v === "" || v === null || v === undefined ? undefined : Number(v));
 const asNullNum = (v: unknown) => (v === "" || v === null || v === undefined ? null : Number(v));
@@ -36,15 +51,17 @@ function errMsg(e: unknown) {
 
 export function AdminBikeNewPage() {
   return (
-    <section className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
-      <Link to="/admin/bikes" className="text-sm text-steel underline underline-offset-4">
-        Motorcycles
-      </Link>
-      <h1 className="mt-1 font-expanded text-3xl font-extrabold tracking-tight">Add motorcycle</h1>
-      <p className="mt-1 text-steel">
-        Step 1 of 4: details. Inspection, photos and the auction come next.
-      </p>
-      <BikeForm />
+    <section className="mx-auto max-w-4xl px-4 pt-6 pb-14 sm:px-6">
+      <AdminNav current="bikes" />
+      <PageHeader
+        className="mt-4"
+        context={<BackToBikes />}
+        title="Add motorcycle"
+        description="Step 1 of 4: details. Inspection, photos and the auction come next."
+      />
+      <Panel className="mt-6">
+        <BikeForm />
+      </Panel>
     </section>
   );
 }
@@ -54,15 +71,24 @@ export function AdminBikeEditPage() {
   const q = useQuery(adminBikeQuery(bikeId));
   if (q.isPending)
     return (
-      <div className="mx-auto max-w-4xl space-y-4 px-4 py-10">
-        <Skeleton className="h-10 w-1/2" />
-        <Skeleton className="h-96 w-full" />
+      <div className="mx-auto max-w-4xl space-y-4 px-4 pt-6 pb-14 sm:px-6" aria-busy="true">
+        <AdminNav current="bikes" />
+        <Skeleton className="mt-6 h-4 w-24" />
+        <Skeleton className="h-10 w-2/3" />
+        <Skeleton className="h-11 w-full max-w-lg rounded-full" />
+        <Skeleton className="h-96 w-full rounded-xl" />
       </div>
     );
   if (q.isError)
     return (
-      <div className="mx-auto max-w-4xl px-4 py-10">
-        <Alert>{errMsg(q.error)}</Alert>
+      <div className="mx-auto max-w-4xl px-4 pt-6 pb-14 sm:px-6">
+        <AdminNav current="bikes" />
+        <LoadError
+          className="mt-6"
+          title="Couldn't load this motorcycle."
+          detail={errMsg(q.error)}
+          onRetry={() => void q.refetch()}
+        />
       </div>
     );
   const { bike, lockedReason, auctions } = q.data;
@@ -70,33 +96,48 @@ export function AdminBikeEditPage() {
     (a) => a.active === 1 && a.status && ["DRAFT", "SCHEDULED", "LIVE"].includes(a.status),
   );
   return (
-    <section className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
-      <Link to="/admin/bikes" className="text-sm text-steel underline underline-offset-4">
-        Motorcycles
-      </Link>
-      <h1 className="mt-1 font-expanded text-3xl font-extrabold tracking-tight">
-        {bike.manufactureYear} {bike.make} {bike.model} {bike.variant ?? ""}
-      </h1>
-      {lockedReason && (
-        <p className="mt-3 rounded-md border border-amber/40 bg-amber/10 px-4 py-3 text-sm font-medium">
-          {lockedReason}.
-        </p>
-      )}
-      <nav aria-label="Listing steps" className="mt-6 flex flex-wrap gap-2 text-sm">
-        {[
-          ["details", "1. Details"],
-          ["inspection", `2. Inspection${bike.inspection ? " ✓" : ""}`],
-          ["photos", `3. Photos (${bike.images.length})`],
-          ["auction", "4. Auction"],
-        ].map(([h, l]) => (
-          <a
-            key={h}
-            href={`#${h}`}
-            className="rounded-full border border-rule bg-paper px-3 py-1.5 font-semibold hover:border-asphalt"
-          >
-            {l}
-          </a>
-        ))}
+    <section className="mx-auto max-w-4xl px-4 pt-6 pb-14 sm:px-6">
+      <AdminNav current="bikes" />
+      <PageHeader
+        className="mt-4"
+        context={<BackToBikes />}
+        title={`${bike.manufactureYear} ${bike.make} ${bike.model} ${bike.variant ?? ""}`}
+      />
+      {lockedReason && <Callout className="mt-4">{lockedReason}.</Callout>}
+      <nav aria-label="Listing steps" className="mt-6">
+        <ol className="flex flex-wrap gap-2 text-sm">
+          {(
+            [
+              ["details", "Details", null],
+              ["inspection", "Inspection", bike.inspection ? "done" : null],
+              ["photos", "Photos", `${bike.images.length}`],
+              ["auction", "Auction", null],
+            ] as const
+          ).map(([h, l, extra], i) => (
+            <li key={h}>
+              <a
+                href={`#${h}`}
+                className="inline-flex min-h-11 items-center gap-2 rounded-full border border-control/50 bg-paper py-1 pr-4 pl-1.5 font-semibold hover:border-asphalt"
+              >
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "flex size-7 items-center justify-center rounded-full text-xs font-bold tnum",
+                    extra === "done" ? "bg-win text-white" : "bg-concrete text-asphalt",
+                  )}
+                >
+                  {extra === "done" ? "✓" : i + 1}
+                </span>
+                <span className="sr-only">Step {i + 1}: </span>
+                {l}
+                {extra === "done" && <span className="sr-only"> (done)</span>}
+                {extra !== null && extra !== "done" && (
+                  <span className="font-normal text-steel tnum">({extra})</span>
+                )}
+              </a>
+            </li>
+          ))}
+        </ol>
       </nav>
       <Section id="details" title="Details">
         <BikeForm bike={bike} locked={!!lockedReason} />
@@ -110,13 +151,13 @@ export function AdminBikeEditPage() {
       <Section id="auction" title="Auction">
         {open ? <OpenAuction auctionId={open.auctionId} /> : <CreateAuction bike={bike} />}
         {auctions.filter((a) => a !== open).length > 0 && (
-          <div className="mt-6">
-            <h3 className="text-sm font-semibold text-steel">Previous auctions</h3>
-            <ul className="mt-2 space-y-1 text-sm">
+          <div className="mt-6 border-t border-rule pt-5">
+            <h3 className="text-sm font-bold">Previous auctions</h3>
+            <ul className="mt-2 space-y-2 text-sm">
               {auctions
                 .filter((a) => a !== open)
                 .map((a) => (
-                  <li key={a.auctionId} className="flex items-center gap-3">
+                  <li key={a.auctionId} className="flex flex-wrap items-center gap-3">
                     {a.status && <StatusBadge status={a.status as Card["status"]} />}
                     <span>{a.closesAt ? `closed ${formatIST(a.closesAt)}` : a.auctionId}</span>
                   </li>
@@ -129,26 +170,11 @@ export function AdminBikeEditPage() {
   );
 }
 
-function Section({
-  id,
-  title,
-  children,
-}: {
-  id: string;
-  title: string;
-  children: React.ReactNode;
-}) {
+function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
-    <section
-      id={id}
-      aria-labelledby={`${id}-h`}
-      className="mt-8 scroll-mt-6 rounded-xl border border-rule bg-paper p-5 sm:p-6"
-    >
-      <h2 id={`${id}-h`} className="mb-5 text-xl font-bold">
-        {title}
-      </h2>
+    <Panel id={id} title={title} className="mt-6">
       {children}
-    </section>
+    </Panel>
   );
 }
 
@@ -193,9 +219,9 @@ function BikeForm({ bike, locked = false }: { bike?: PublicBike; locked?: boolea
     save.mutate(body);
   });
   return (
-    <form onSubmit={onSubmit} noValidate className="mt-6 space-y-6">
+    <form onSubmit={onSubmit} noValidate className="space-y-8">
       <fieldset disabled={locked} className="grid gap-4 sm:grid-cols-3">
-        <legend className="mb-2 font-semibold">Vehicle</legend>
+        <legend className="mb-3 font-bold">Vehicle</legend>
         <Field label="Make" {...r("make")} error={e.make?.message} placeholder="Royal Enfield" />
         <Field label="Model" {...r("model")} error={e.model?.message} placeholder="Classic 350" />
         <Field
@@ -245,7 +271,7 @@ function BikeForm({ bike, locked = false }: { bike?: PublicBike; locked?: boolea
         />
       </fieldset>
       <fieldset disabled={locked} className="grid gap-4 sm:grid-cols-3">
-        <legend className="mb-2 font-semibold">Registration and documents</legend>
+        <legend className="mb-3 font-bold">Registration and documents</legend>
         <Field
           label="RTO code"
           {...r("rtoCode")}
@@ -277,7 +303,7 @@ function BikeForm({ bike, locked = false }: { bike?: PublicBike; locked?: boolea
         />
       </fieldset>
       <fieldset disabled={locked} className="space-y-4">
-        <legend className="mb-2 font-semibold">Sale conditions</legend>
+        <legend className="mb-3 font-bold">Sale conditions</legend>
         <CheckboxField
           label="Repossessed vehicle"
           hint="Recovered by a bank or lender."
@@ -296,13 +322,9 @@ function BikeForm({ bike, locked = false }: { bike?: PublicBike; locked?: boolea
         />
       </fieldset>
       {save.isError && <Alert>{errMsg(save.error)}</Alert>}
-      {save.isSuccess && bike && (
-        <p role="status" className="text-sm font-semibold text-ledger">
-          Saved.
-        </p>
-      )}
+      {save.isSuccess && bike && <SuccessNote>Saved.</SuccessNote>}
       {!locked && (
-        <Button type="submit" disabled={save.isPending}>
+        <Button type="submit" loading={save.isPending}>
           {save.isPending ? "Saving…" : bike ? "Save details" : "Save and continue"}
         </Button>
       )}
@@ -387,7 +409,7 @@ function InspectionForm({ bike, locked }: { bike: PublicBike; locked: boolean })
           {INSPECTION_SECTIONS.map((k) => (
             <div
               key={k}
-              className="grid grid-cols-[8rem_1fr] items-start gap-2 rounded-md border border-rule p-3"
+              className="grid grid-cols-1 items-start gap-3 rounded-lg border border-rule bg-concrete/40 p-3 min-[420px]:grid-cols-[8rem_minmax(0,1fr)]"
             >
               <SelectField
                 label={SECTION_LABEL[k]!}
@@ -412,13 +434,9 @@ function InspectionForm({ bike, locked }: { bike: PublicBike; locked: boolean })
         </div>
       </fieldset>
       {save.isError && <Alert>{errMsg(save.error)}</Alert>}
-      {save.isSuccess && (
-        <p role="status" className="text-sm font-semibold text-ledger">
-          Inspection saved.
-        </p>
-      )}
+      {save.isSuccess && <SuccessNote>Inspection saved.</SuccessNote>}
       {!locked && (
-        <Button type="submit" disabled={save.isPending}>
+        <Button type="submit" loading={save.isPending}>
           {save.isPending ? "Saving…" : "Save inspection"}
         </Button>
       )}
@@ -483,7 +501,19 @@ function Photos({ bike, locked }: { bike: PublicBike; locked: boolean }) {
         removes location and camera data. Up to 12 photos; the first is the cover.
       </p>
       {!locked && (
-        <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-steel/40 bg-concrete/40 px-6 py-8 text-center hover:border-asphalt">
+        <label className="mt-4 flex cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-control/60 bg-concrete/50 px-6 py-8 text-center transition-colors hover:border-asphalt has-[input:focus-visible]:outline-3 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-hivis">
+          <svg
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            className="mb-1 size-7 text-steel"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M4 16.5V19a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2.5M12 15V4M7.5 8.5L12 4l4.5 4.5" />
+          </svg>
           <span className="font-semibold">Choose photos</span>
           <span className="text-sm text-steel">JPEG, PNG or WebP</span>
           <input
@@ -497,7 +527,29 @@ function Photos({ bike, locked }: { bike: PublicBike; locked: boolean }) {
         </label>
       )}
       {progress && (
-        <p role="status" className="mt-3 text-sm">
+        <p role="status" className="mt-3 flex items-center gap-2 text-sm font-medium">
+          <svg
+            viewBox="0 0 20 20"
+            aria-hidden="true"
+            className="size-4 animate-spin motion-reduce:animate-none"
+          >
+            <circle
+              cx="10"
+              cy="10"
+              r="7.5"
+              fill="none"
+              stroke="currentColor"
+              strokeOpacity=".3"
+              strokeWidth="2.5"
+            />
+            <path
+              d="M17.5 10a7.5 7.5 0 0 0-7.5-7.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+            />
+          </svg>
           {progress}
         </p>
       )}
@@ -512,53 +564,53 @@ function Photos({ bike, locked }: { bike: PublicBike; locked: boolean }) {
         </div>
       )}
       {bike.images.length === 0 ? (
-        <p className="mt-4 text-sm text-steel">No photos yet. Buyers will see a placeholder.</p>
+        <p className="mt-4 rounded-md border border-dashed border-control/50 px-4 py-6 text-center text-sm text-steel">
+          No photos yet. Buyers will see a placeholder.
+        </p>
       ) : (
         <ul className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           {bike.images.map((im, idx) => (
-            <li key={im.id} className="overflow-hidden rounded-lg border border-rule">
+            <li key={im.id} className="overflow-hidden rounded-lg border border-rule bg-paper">
               <div className="relative aspect-[4/3] bg-concrete">
                 <img src={im.url} alt={im.alt} className="size-full object-cover" />
                 {idx === 0 && (
-                  <span className="absolute left-2 top-2 rounded bg-hivis px-2 py-0.5 text-xs font-bold text-white">
+                  <span className="absolute top-2 left-2 rounded-full bg-hivis px-2.5 py-1 text-xs leading-none font-bold text-on-hivis">
                     Cover
                   </span>
                 )}
               </div>
               {!locked && (
-                <div className="flex flex-wrap gap-1 p-2 text-xs">
+                <div className="flex flex-wrap items-center gap-0.5 p-1 text-xs">
                   {idx > 0 && (
-                    <button
-                      type="button"
-                      className="rounded px-2 py-1 font-semibold hover:bg-concrete"
-                      onClick={() => move(idx, 0)}
-                    >
+                    <button type="button" className={photoBtn} onClick={() => move(idx, 0)}>
                       Make cover
                     </button>
                   )}
                   {idx > 0 && (
                     <button
                       type="button"
-                      className="rounded px-2 py-1 hover:bg-concrete"
+                      className={cn(photoBtn, "w-11 justify-center px-0")}
                       aria-label="Move earlier"
+                      title="Move earlier"
                       onClick={() => move(idx, idx - 1)}
                     >
-                      ←
+                      <ArrowGlyph dir="left" />
                     </button>
                   )}
                   {idx < ids.length - 1 && (
                     <button
                       type="button"
-                      className="rounded px-2 py-1 hover:bg-concrete"
+                      className={cn(photoBtn, "w-11 justify-center px-0")}
                       aria-label="Move later"
+                      title="Move later"
                       onClick={() => move(idx, idx + 1)}
                     >
-                      →
+                      <ArrowGlyph dir="right" />
                     </button>
                   )}
                   <button
                     type="button"
-                    className="ml-auto rounded px-2 py-1 font-semibold text-danger hover:bg-danger/10"
+                    className={cn(photoBtn, "ml-auto text-danger hover:bg-danger/10")}
                     onClick={() => del.mutate(im.id)}
                   >
                     Delete
@@ -690,7 +742,12 @@ function CreateAuction({ bike }: { bike: PublicBike }) {
   const [now] = useState(() => Date.now());
   if (!bike.inspection)
     return (
-      <p className="text-steel">Record an inspection first. Buyers need it before they bid.</p>
+      <Callout tone="info">
+        Record an inspection first. Buyers need it before they bid.{" "}
+        <a href="#inspection" className="font-semibold underline underline-offset-4">
+          Go to inspection
+        </a>
+      </Callout>
     );
   const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -734,12 +791,12 @@ function CreateAuction({ bike }: { bike: PublicBike }) {
         }}
       />
       {create.isError && <Alert>{errMsg(create.error)}</Alert>}
-      <Button type="submit" disabled={create.isPending}>
+      <Button type="submit" loading={create.isPending}>
         {create.isPending ? "Creating…" : "Create draft auction"}
       </Button>
       {preview && (
-        <div className="max-w-sm pt-4">
-          <p className="mb-2 text-sm font-semibold">Buyer preview</p>
+        <div className="max-w-sm border-t border-rule pt-5">
+          <p className="mb-2 text-sm font-bold">Buyer preview</p>
           <div className="pointer-events-none">
             <AuctionCard a={preview} />
           </div>
@@ -761,26 +818,41 @@ function OpenAuction({ auctionId }: { auctionId: string }) {
     mutationFn: () => apiSend("POST", `/admin/auctions/${auctionId}/schedule`, undefined, (x) => x),
     onSuccess: done,
   });
+  if (q.isError)
+    return (
+      <LoadError
+        title="Couldn't load this auction."
+        detail={errMsg(q.error)}
+        onRetry={() => void q.refetch()}
+      />
+    );
   if (!q.data) return <Skeleton className="h-40 w-full" />;
   const s = q.data.state;
   const status = s.status as Card["status"];
   if (status !== "DRAFT") {
     return (
-      <div className="flex flex-wrap items-center gap-3">
-        <StatusBadge status={status} />
-        <span className="text-sm">
-          {formatINR(s.startPriceMinor)} start, {formatIST(s.startsAt)} → {formatIST(s.closesAt)}
-        </span>
-        <Link
-          to="/auctions/$auctionId"
-          params={{ auctionId }}
-          className="font-semibold underline underline-offset-4"
-        >
-          View public page
-        </Link>
-        <Link to="/admin" className="text-sm underline underline-offset-4">
-          Manage on the Auction desk
-        </Link>
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <StatusBadge status={status} />
+          <span className="text-sm tnum">
+            {formatINR(s.startPriceMinor)} start, {formatIST(s.startsAt)} → {formatIST(s.closesAt)}
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="secondary" size="sm">
+            <Link to="/auctions/$auctionId" params={{ auctionId }}>
+              View public page
+            </Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/admin/auctions/$auctionId" params={{ auctionId }}>
+              Live ops
+            </Link>
+          </Button>
+          <Button asChild variant="ghost" size="sm">
+            <Link to="/admin">Manage on the Auction desk</Link>
+          </Button>
+        </div>
       </div>
     );
   }
@@ -811,19 +883,37 @@ function OpenAuction({ auctionId }: { auctionId: string }) {
       {(update.isError || schedule.isError) && (
         <Alert>{errMsg(update.error ?? schedule.error)}</Alert>
       )}
-      {update.isSuccess && (
-        <p role="status" className="text-sm font-semibold text-ledger">
-          Draft saved.
-        </p>
-      )}
+      {update.isSuccess && <SuccessNote>Draft saved.</SuccessNote>}
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" variant="secondary" disabled={update.isPending}>
+        <Button type="submit" variant="secondary" loading={update.isPending}>
           Save draft
         </Button>
-        <Button type="button" onClick={() => schedule.mutate()} disabled={schedule.isPending}>
+        <Button type="button" onClick={() => schedule.mutate()} loading={schedule.isPending}>
           {schedule.isPending ? "Scheduling…" : "Schedule auction"}
         </Button>
       </div>
     </form>
+  );
+}
+
+const photoBtn =
+  "inline-flex min-h-11 items-center rounded-md px-2.5 font-semibold transition-colors hover:bg-concrete";
+
+function ArrowGlyph({ dir }: { dir: "left" | "right" }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      aria-hidden="true"
+      className="size-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path
+        d={dir === "left" ? "M16 10H4M8.5 5.5L4 10l4.5 4.5" : "M4 10h12M11.5 5.5L16 10l-4.5 4.5"}
+      />
+    </svg>
   );
 }

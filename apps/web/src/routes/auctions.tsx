@@ -4,10 +4,15 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import type { z } from "zod";
 import { AuctionCard, CardSkeleton } from "@/components/auction-card";
+import { StaleNotice } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { SelectField } from "@/components/ui/form";
+import { EmptyState, LoadError } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
+import { SelectField } from "@/components/ui/form";
+import { CrossGlyph, FilterGlyph } from "@/components/ui/icons";
+import { chipClass, tabClass, tabListClass } from "@/components/ui/tabs";
 import { catalogueQuery, facetsQuery, type CatalogueFilters } from "@/lib/catalogue";
+import { activeFilterChips, CC_BANDS } from "@/lib/catalogue-filters";
 import { cn } from "@/lib/utils";
 
 const STATUS_TABS: { value: z.infer<typeof ListStatus>; label: string }[] = [
@@ -19,6 +24,7 @@ const STATUS_TABS: { value: z.infer<typeof ListStatus>; label: string }[] = [
 const SORTS: { value: z.infer<typeof ListSort>; label: string }[] = [
   { value: "ending_soon", label: "Ending soon" },
   { value: "starting_soon", label: "Starting soon" },
+  { value: "recently_ended", label: "Recently ended" },
   { value: "price_asc", label: "Lowest price" },
   { value: "price_desc", label: "Highest price" },
   { value: "newest", label: "Newest listings" },
@@ -46,6 +52,8 @@ export function AuctionsPage() {
     "priceMax",
   ].filter((k) => search[k as keyof typeof search] !== undefined).length;
 
+  const chips = activeFilterChips(search);
+
   const apply = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
@@ -66,10 +74,17 @@ export function AuctionsPage() {
   };
 
   return (
-    <section className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+    <section className="mx-auto max-w-6xl px-4 pt-8 pb-14 sm:px-6 sm:pt-10">
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <h1 className="font-expanded text-3xl font-extrabold tracking-tight">Auctions</h1>
-        <div className="w-48">
+        <div>
+          <h1 className="font-expanded text-3xl font-extrabold tracking-tight sm:text-4xl">
+            Auctions
+          </h1>
+          <p className="mt-1.5 text-steel">
+            Inspected used and repossessed two-wheelers. Prices in ₹, times in IST.
+          </p>
+        </div>
+        <div className="w-full sm:w-52">
           <SelectField
             label="Sort by"
             value={search.sort ?? ""}
@@ -87,11 +102,7 @@ export function AuctionsPage() {
         </div>
       </div>
 
-      <div
-        role="tablist"
-        aria-label="Auction status"
-        className="mt-6 flex gap-1 overflow-x-auto border-b border-rule"
-      >
+      <div role="tablist" aria-label="Auction status" className={cn("mt-6", tabListClass)}>
         {STATUS_TABS.map((t) => {
           const selected = (search.status ?? "ACTIVE") === t.value;
           return (
@@ -100,12 +111,7 @@ export function AuctionsPage() {
               role="tab"
               aria-selected={selected}
               onClick={() => set({ status: t.value === "ACTIVE" ? undefined : t.value })}
-              className={cn(
-                "-mb-px whitespace-nowrap border-b-2 px-4 py-3 text-sm font-semibold",
-                selected
-                  ? "border-hivis text-asphalt"
-                  : "border-transparent text-steel hover:text-asphalt",
-              )}
+              className={tabClass(selected)}
             >
               {t.label}
             </button>
@@ -113,23 +119,26 @@ export function AuctionsPage() {
         })}
       </div>
 
-      <div className="mt-6 grid gap-8 lg:grid-cols-[16rem_1fr]">
+      <div className="mt-6 grid gap-6 lg:grid-cols-[16rem_1fr] lg:gap-8">
         <div>
           <button
             type="button"
-            className="mb-3 flex w-full items-center justify-between rounded-md border border-rule bg-paper px-4 py-3 font-semibold lg:hidden"
+            className="mb-3 flex min-h-12 w-full items-center gap-2 rounded-md border border-control/50 bg-paper px-4 font-semibold lg:hidden"
             aria-expanded={open}
             onClick={() => setOpen((o) => !o)}
           >
+            <FilterGlyph className="size-4.5" />
             Filters{activeCount > 0 && ` (${activeCount})`}
-            <span aria-hidden="true">{open ? "−" : "+"}</span>
+            <span aria-hidden="true" className="ml-auto text-lg leading-none text-steel">
+              {open ? "−" : "+"}
+            </span>
           </button>
           <form
             key={JSON.stringify(search)}
             onSubmit={apply}
             aria-label="Filters"
             className={cn(
-              "flex-col gap-4 rounded-xl border border-rule bg-paper p-4",
+              "flex-col gap-4 rounded-xl border border-rule bg-paper p-4 shadow-card",
               open ? "flex" : "hidden lg:flex",
             )}
           >
@@ -168,6 +177,29 @@ export function AuctionsPage() {
                 defaultValue={search.yearMax ?? ""}
               />
             </fieldset>
+            <div role="group" aria-label="Engine size presets" className="flex flex-wrap gap-2">
+              {CC_BANDS.map((b) => {
+                const on = search.ccMin === b.min && search.ccMax === b.max;
+                return (
+                  <button
+                    key={b.label}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() =>
+                      set(
+                        on
+                          ? { ccMin: undefined, ccMax: undefined }
+                          : { ccMin: b.min, ccMax: b.max },
+                      )
+                    }
+                    className={chipClass(on)}
+                  >
+                    {b.label}
+                    <span className="sr-only"> ({b.hint})</span>
+                  </button>
+                );
+              })}
+            </div>
             <fieldset className="grid grid-cols-2 gap-2">
               <legend className="mb-1.5 text-sm font-semibold">Engine (cc)</legend>
               <Field
@@ -228,6 +260,19 @@ export function AuctionsPage() {
         </div>
 
         <div>
+          {chips.length > 0 && (
+            <ul aria-label="Active filters" className="mb-4 flex flex-wrap gap-2">
+              {chips.map((c) => (
+                <li key={c.label}>
+                  <button type="button" onClick={() => set(c.clear)} className={chipClass(false)}>
+                    {c.label}
+                    <CrossGlyph className="size-3.5 text-steel" />
+                    <span className="sr-only">Remove filter</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           {list.isPending ? (
             <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
               {Array.from({ length: 6 }, (_, i) => (
@@ -235,30 +280,20 @@ export function AuctionsPage() {
               ))}
             </div>
           ) : list.isError && !list.data ? (
-            <div className="rounded-xl border border-danger/30 bg-paper p-8 text-center">
-              <p className="font-semibold">Couldn't load auctions.</p>
-              <Button className="mt-4" variant="secondary" onClick={() => void list.refetch()}>
-                Try again
-              </Button>
-            </div>
+            <LoadError title="Couldn't load auctions." onRetry={() => void list.refetch()} />
           ) : items.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-steel/40 bg-paper px-6 py-12 text-center">
-              <p className="text-lg font-semibold">No auctions match these filters</p>
-              <p className="mt-2 text-steel">
-                Widen the price or year range, or clear the filters.
-              </p>
-            </div>
+            <EmptyState
+              title="No auctions match these filters"
+              body="Widen the price or year range, try another status tab, or clear the filters."
+            />
           ) : (
             <>
               {list.isRefetchError && (
-                <p
-                  role="status"
-                  className="mb-4 rounded-md bg-amber/15 px-3 py-2 text-sm font-semibold"
-                >
+                <StaleNotice>
                   Couldn't refresh. Prices shown may be out of date; retrying automatically.
-                </p>
+                </StaleNotice>
               )}
-              <p className="mb-4 text-sm text-steel" aria-live="polite">
+              <p className="mb-4 text-sm font-semibold text-steel tnum" aria-live="polite">
                 {items.length}
                 {list.hasNextPage ? "+" : ""} auctions
               </p>

@@ -4,6 +4,8 @@
 // counts. Requires Turnstile TEST keys (the dummy token below only passes those).
 //
 //   node scripts/auth-gate.mjs https://bike-auction.<you>.workers.dev [--runs 20]
+import { readFileSync } from "node:fs";
+
 const base = process.argv[2];
 if (!base) {
   console.error("Usage: node scripts/auth-gate.mjs <baseUrl> [--runs 20]");
@@ -15,6 +17,12 @@ const DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX";
 // The edge limit allows 20 credential requests/min per IP; 2 per iteration → pace at ~6.5 s.
 const PACE_MS = 6500;
 const origin = new URL(base).origin;
+// Sign-up requires consent to the current Privacy Notice (single source: packages/contracts).
+const NOTICE_VERSION = readFileSync(
+  new URL("../packages/contracts/src/account.ts", import.meta.url),
+  "utf8",
+).match(/PRIVACY_NOTICE_VERSION = "([^"]+)"/)?.[1];
+if (!NOTICE_VERSION) throw new Error("PRIVACY_NOTICE_VERSION not found in packages/contracts");
 
 const lat = { signUp: [], signIn: [], me: [] };
 const failures = [];
@@ -54,7 +62,12 @@ for (let i = 1; i <= RUNS; i++) {
   try {
     const up = await call("/auth/sign-up/email", {
       method: "POST",
-      body: { email, password, name: "Release Check" },
+      body: {
+        email,
+        password,
+        name: "Release Check",
+        consent: { accepted: true, version: NOTICE_VERSION },
+      },
     });
     lat.signUp.push(up.ms);
     if (!up.res.ok) throw new Error(`sign-up ${up.res.status}: ${up.text.slice(0, 160)}`);

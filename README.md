@@ -4,12 +4,14 @@ Real-time auctions for used and repossessed two-wheelers. Each auction is run by
 Cloudflare Durable Object, so concurrent bids get a single, provable order. Built on free Cloudflare
 infrastructure. Design: [`BLUEPRINT.md`](BLUEPRINT.md) · Status: [`docs/progress.md`](docs/progress.md).
 
-> **Status: Day 6 of 10.** Accounts, roles, the auction rules engine, the real-time bidding backend, the
-> motorcycle catalogue and admin desk, and a reliable live auction page (reconnecting WebSocket feed, live
-> price/leader/outbid, bid history, anti-sniping countdown, server-confirmed results) are in place and
-> verified locally with two buyers bidding against each other. API: [`docs/api.md`](docs/api.md).
-> Screenshots: [`docs/screenshots/day6`](docs/screenshots/day6), [`day5`](docs/screenshots/day5).
-> Not yet verified on real Cloudflare (deploy pending your approval).
+> **Status: Day 8 of 10.** Auctions with manual and automatic (proxy) bidding, a live auction page that survives
+> disconnects and restarts, My Bids, Watchlist, a full admin desk with live operations and audit trail, structured
+> logs and metrics, strict security headers and rate limits, consent, data export and account deletion, light/dark
+> themes. Verified locally (`pnpm check`: 562 tests; four browser suites; axe scan). API:
+> [`docs/api.md`](docs/api.md) · Runbook: [`docs/runbook.md`](docs/runbook.md) · Threat model:
+> [`docs/threat-model.md`](docs/threat-model.md) · Privacy: [`docs/privacy.md`](docs/privacy.md) · Screenshots:
+> [`docs/screenshots/day8`](docs/screenshots/day8). **Not yet verified on real Cloudflare** (deploy pending your
+> approval).
 
 ## Demo accounts
 
@@ -82,6 +84,19 @@ python3 tests/e2e/live.py 8799 /tmp/e2e-live   # starts/stops its own `wrangler 
 Buyer A (desktop) and Buyer B (mobile) bid against each other while the admin watches: live price,
 outbid notice to the right user, anti-sniping deadline seen by all, refresh, offline → recovery, a killed and
 restarted server → automatic recovery, no duplicate bids, simultaneous bids, server-confirmed close, expired session.
+
+### All browser suites (Playwright for Python; `pip install playwright axe-playwright-python`)
+
+| Script                  | What it proves                                                                                                                                         | How                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- |
+| `tests/e2e/journey.py`  | Admin lists a bike (photo EXIF stripped) → auction → buyer bids                                                                                        | needs a running local app |
+| `tests/e2e/live.py`     | Two buyers + admin: live updates, outbid, offline, **server restart**, simultaneous bids, close, proxy bids                                            | starts its own server     |
+| `tests/e2e/journeys.py` | Buyer (register with consent → … → win → export), privacy (consent refused, export, delete, history intact), admin ops/ledger/audit, light/dark/mobile | starts its own server     |
+| `tests/e2e/a11y.py`     | axe-core WCAG 2.x A/AA on every main page, desktop + mobile, anon/buyer/admin: fails on serious/critical                                               | needs a running local app |
+
+For a running app use `npx wrangler dev --var TURNSTILE_SECRET_KEY:` from `apps/worker` when Cloudflare's captcha
+service isn't reachable (this sandbox): with `ENVIRONMENT=development` the Worker then skips captcha; anywhere else it
+refuses to start without the secret. The self-starting scripts do this automatically (`E2E_TURNSTILE=1` keeps it on).
 
 ### Demo catalogue
 

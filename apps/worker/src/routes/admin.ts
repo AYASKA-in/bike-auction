@@ -4,6 +4,7 @@ import { AppError } from "../lib/problem";
 import { requireAdmin } from "../middleware/session";
 import { adminAuctionRoutes } from "./admin-auctions";
 import { adminBikeRoutes } from "./admin-bikes";
+import { adminOpsRoutes } from "./admin-ops";
 import { EFFECTIVE } from "./catalogue";
 import type { AppEnv } from "../types";
 
@@ -54,5 +55,6 @@ adminRoutes.get("/security-events", async (c) => {
   return c.json({ items, nextBefore: items.length === limit ? items.at(-1)!.createdAt : null });
 });
 
+adminRoutes.route("/", adminOpsRoutes);
 adminRoutes.route("/", adminAuctionRoutes);
 adminRoutes.route("/", adminBikeRoutes);

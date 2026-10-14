@@ -1,5 +1,5 @@
-import { minNextBid as ladderMinNextBid } from "../ladder";
-import { isValidAmount, safeMultiply, type Paise } from "../money";
+import { incrementFor, minNextBid as ladderMinNextBid } from "../ladder";
+import { isValidAmount, safeAdd, safeMultiply, type Paise } from "../money";
 import {
   AUCTION_ID_PATTERN,
   DEFAULT_RULES,
@@ -10,7 +10,7 @@ import {
 } from "./config";
 import { DomainInvariantError, domainError, type DomainError } from "./errors";
 import type { AuctionEvent, EventDraft } from "./events";
-import type { AuctionOutcome, AuctionRules, AuctionState } from "./types";
+import type { AuctionOutcome, AuctionRules, AuctionState, BidKind, ProxyBid } from "./types";
 
 /**
  * The auction engine. Every function is PURE: same inputs → same outputs, no clock, no I/O, no
@@ -123,6 +123,7 @@ const EMPTY: Omit<
   endedAt: null,
   cancelledAt: null,
   cancelReason: null,
+  proxies: [],
 };
 
 /** DRAFT auction. Emits auction.created (seq 1). */
@@ -320,7 +321,10 @@ export interface PlaceBidCommand {
  *   3. amount is a valid integer        7. amount ≤ fat-finger limit
  *   4. amount ≤ absolute ceiling
  * A rejection never changes price, leader, bid count or ledger. It may carry lifecycle events
- * from step 1, which the caller must commit.
+ * from step 1, which the caller must commit. One exception (proxy tie): a bid exactly equal to
+ * someone's earlier maximum is rejected BID_TOO_LOW while that maximum's automatic bid at the same
+ * amount is committed. An accepted bid is followed, in the same command, by any automatic
+ * responses from standing maxima (kind PROXY) and at most one soft-close extension.
  */
 export function placeBid(state: AuctionState, cmd: PlaceBidCommand): BidDecision {
   assertNow(cmd.now);
@@ -377,24 +381,110 @@ export function placeBid(state: AuctionState, cmd: PlaceBidCommand): BidDecision
     );
   }
 
-  // ── accept ──
+  const stepId = stepIds(cmd.bidId);
+
+  // ── tie with an earlier maximum (BLUEPRINT §4.7: equal amounts → the earlier commitment wins) ──
+  // A manual bid exactly equal to someone else's standing maximum cannot be recorded and then
+  // matched (the ledger is strictly increasing), so the earlier maximum takes the amount and this
+  // bid is rejected as too low. The proxy step is committed even though the command fails.
+  const rival = rankProxies(
+    s.proxies.filter((p) => p.userId !== cmd.userId && p.maxMinor >= amount),
+  )[0];
+  if (rival && rival.maxMinor === amount) {
+    emitBid(log, {
+      bidId: stepId(),
+      userId: rival.userId,
+      amountMinor: amount,
+      kind: "PROXY",
+      now: cmd.now,
+    });
+    resolveProxies(log, cmd.now, stepId);
+    applySoftClose(log, cmd.now);
+    return log.fail(
+      domainError("BID_TOO_LOW", "An earlier maximum bid of the same amount takes priority", {
+        minNextBidMinor: minNextBidFor(log.state),
+      }),
+    );
+  }
+
+  // ── accept, then let standing maxima respond (same atomic command) ──
+  const bidSeq = emitBid(log, {
+    bidId: cmd.bidId,
+    userId: cmd.userId,
+    amountMinor: amount,
+    kind: "MANUAL",
+    now: cmd.now,
+  });
+  resolveProxies(log, cmd.now, stepId);
+  applySoftClose(log, cmd.now);
+  return {
+    ok: true,
+    state: log.state,
+    events: log.events,
+    bid: { bidId: cmd.bidId, seq: bidSeq, amountMinor: amount },
+  };
+}
+
+// ───────────────────────────── proxy (automatic) bidding ─────────────────────────────
+
+/**
+ * Ranks maxima: higher max first; equal maxima → earlier `setSeq` (BLUEPRINT §4.7); `userId` only
+ * as a final deterministic tie-break (competing maxima never share a setSeq, see ADR 004).
+ */
+export function compareProxies(a: ProxyBid, b: ProxyBid): number {
+  return (
+    b.maxMinor - a.maxMinor ||
+    a.setSeq - b.setSeq ||
+    (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0)
+  );
+}
+
+function rankProxies(proxies: readonly ProxyBid[]): ProxyBid[] {
+  return [...proxies].sort(compareProxies);
+}
+
+export function proxyOf(state: AuctionState, userId: string): ProxyBid | null {
+  return state.proxies.find((p) => p.userId === userId) ?? null;
+}
+
+/** Deterministic ids for automatic steps: `<commandBidId>-p1`, `-p2`, … (pure, no randomness). */
+function stepIds(base: string): () => string {
+  let n = 0;
+  return () => `${base}-p${++n}`;
+}
+
+/** Appends one accepted bid (manual or automatic) and returns its seq. */
+function emitBid(
+  log: EventLog,
+  b: {
+    readonly bidId: string;
+    readonly userId: string;
+    readonly amountMinor: Paise;
+    readonly kind: BidKind;
+    readonly now: number;
+  },
+): number {
+  const s = log.state;
+  if (s.currentPriceMinor !== null && b.amountMinor <= s.currentPriceMinor) {
+    throw new DomainInvariantError("Accepted bids must strictly increase");
+  }
   const accepted: AuctionState = {
     ...s,
-    currentPriceMinor: amount,
-    leaderUserId: cmd.userId,
+    currentPriceMinor: b.amountMinor,
+    leaderUserId: b.userId,
     leaderBidSeq: s.seq + 1,
     bidCount: s.bidCount + 1,
   };
-  const nextMin = minNextBidFor(accepted);
   log.emit(
     {
       type: "bid.accepted",
-      at: cmd.now,
-      bidId: cmd.bidId,
-      userId: cmd.userId,
-      amountMinor: amount,
+      at: b.now,
+      bidId: b.bidId,
+      userId: b.userId,
+      amountMinor: b.amountMinor,
+      kind: b.kind,
       previousPriceMinor: s.currentPriceMinor,
-      minNextBidMinor: nextMin,
+      minNextBidMinor: minNextBidFor(accepted),
       reserveMet: isReserveMet(accepted),
       closesAt: s.closesAt,
     },
@@ -405,31 +495,237 @@ export function placeBid(state: AuctionState, cmd: PlaceBidCommand): BidDecision
       bidCount: accepted.bidCount,
     },
   );
-  const bidSeq = log.state.seq;
+  return log.state.seq;
+}
 
-  // ── soft close ──
-  const sc = s.rules.softClose;
-  if (sc && log.state.closesAt - cmd.now < sc.windowMs) {
-    const proposed = Math.min(cmd.now + sc.extensionMs, log.state.hardCloseAt);
-    if (proposed > log.state.closesAt) {
-      const previous = log.state.closesAt;
-      log.emit(
-        {
-          type: "auction.extended",
-          at: cmd.now,
-          previousClosesAt: previous,
-          closesAt: proposed,
-          extensionCount: log.state.extensionCount + 1,
-        },
-        { closesAt: proposed, extensionCount: log.state.extensionCount + 1 },
+/**
+ * Reserve rule for maxima (eBay behaviour): when the winning maximum covers the reserve but the
+ * computed price is below it, the price jumps to exactly the reserve.
+ */
+function withReserveJump(state: AuctionState, price: Paise, maxMinor: Paise): Paise {
+  const r = state.reserveMinor;
+  return r !== null && maxMinor >= r && price < r ? r : price;
+}
+
+/**
+ * Lets standing maxima respond until the auction is stable: no maximum other than the leader's can
+ * still meet the minimum next bid or beat the leader's commitment L = max(current price, leader's
+ * own maximum). Each round takes the best such challenging maximum C:
+ *
+ *   C wins (C > L, or C = L and C was set earlier):
+ *     [leader's maximum, if it is a real step]  then  C at min(C, max(minNext, L + inc(L)))
+ *   L holds (L > C, or equal and L earlier):
+ *     [C's maximum, if below the final price]   then  leader at min(L, max(minNext, C + inc(C)))
+ *
+ * Final prices then pass the reserve rule. Every round permanently exhausts a maximum (price passes
+ * it) or makes it the leader, so the loop ends; with the stable state every command leaves behind,
+ * it runs at most once (two steps).
+ */
+function resolveProxies(log: EventLog, now: number, stepId: () => string): void {
+  const limit = 2 * log.state.proxies.length + 2;
+  for (let round = 0; ; round++) {
+    if (round > limit) throw new DomainInvariantError("Proxy resolution did not converge");
+    const s = log.state;
+    const min = minNextBidFor(s);
+    const leader = s.leaderUserId;
+    const price = s.currentPriceMinor;
+    const leaderProxy = leader === null ? null : proxyOf(s, leader);
+    const leaderCommit = price === null ? 0 : Math.max(price, leaderProxy?.maxMinor ?? 0);
+    const outranksLeader = (p: ProxyBid) =>
+      leader !== null &&
+      (p.maxMinor > leaderCommit ||
+        (p.maxMinor === leaderCommit &&
+          leaderProxy !== null &&
+          leaderProxy.maxMinor === leaderCommit &&
+          compareProxies(p, leaderProxy) < 0));
+    // A maximum can act if it can make a valid bid, or if it beats the leader's commitment even
+    // by less than one increment (then it wins capped at its own maximum, e.g. a leader's maximum
+    // defending against a manual bid just below it).
+    const challenger = rankProxies(
+      s.proxies.filter((p) => p.userId !== leader && (p.maxMinor >= min || outranksLeader(p))),
+    )[0];
+    const step = (userId: string, amountMinor: Paise) =>
+      emitBid(log, { bidId: stepId(), userId, amountMinor, kind: "PROXY", now });
+
+    if (!challenger) {
+      // Nobody can compete; a leader whose maximum covers the reserve still lifts the price to it.
+      if (leader !== null && price !== null && leaderProxy) {
+        const target = withReserveJump(s, price, leaderProxy.maxMinor);
+        if (target > price) step(leader, target);
+      }
+      return;
+    }
+    if (leader === null || price === null) {
+      step(challenger.userId, withReserveJump(s, min, challenger.maxMinor));
+      continue;
+    }
+    const ladder = s.rules.ladder;
+    if (outranksLeader(challenger)) {
+      const target = withReserveJump(
+        s,
+        Math.min(
+          challenger.maxMinor,
+          Math.max(min, safeAdd(leaderCommit, incrementFor(leaderCommit, ladder))),
+        ),
+        challenger.maxMinor,
       );
+      const lm = leaderProxy?.maxMinor;
+      if (lm !== undefined && lm > price && lm >= min && lm < target) step(leader, lm);
+      step(challenger.userId, target);
+    } else {
+      // leaderCommit ≥ challenger ≥ min > price, so the leader's commitment is their maximum.
+      if (!leaderProxy) throw new DomainInvariantError("Leader holds without a maximum");
+      const cm = challenger.maxMinor;
+      const target = withReserveJump(
+        s,
+        Math.min(leaderProxy.maxMinor, Math.max(min, safeAdd(cm, incrementFor(cm, ladder)))),
+        leaderProxy.maxMinor,
+      );
+      if (cm < target) step(challenger.userId, cm);
+      step(leader, target);
     }
   }
+}
+
+/**
+ * Soft close, at most once per command: if the command accepted any bid (manual or automatic)
+ * while `closesAt − now < window`, the close moves to `min(now + extension, hardCloseAt)`. All steps
+ * of one command share `now`, so one extension is exactly what per-step extensions would give.
+ */
+function applySoftClose(log: EventLog, now: number): void {
+  const sc = log.state.rules.softClose;
+  if (!sc || log.state.closesAt - now >= sc.windowMs) return;
+  const proposed = Math.min(now + sc.extensionMs, log.state.hardCloseAt);
+  if (proposed <= log.state.closesAt) return;
+  log.emit(
+    {
+      type: "auction.extended",
+      at: now,
+      previousClosesAt: log.state.closesAt,
+      closesAt: proposed,
+      extensionCount: log.state.extensionCount + 1,
+    },
+    { closesAt: proposed, extensionCount: log.state.extensionCount + 1 },
+  );
+}
+
+export interface SetMaxBidCommand {
+  /** Server-generated base id; automatic steps get `<bidId>-p1`, `-p2`, … */
+  readonly bidId: string;
+  /** From the authenticated session, never from the request body. */
+  readonly userId: string;
+  /** Untrusted until validated here. */
+  readonly maxMinor: unknown;
+  readonly now: number;
+}
+
+/** What the owner learns after setting a maximum (their own max, and public auction state). */
+export interface MaxBidOutcome {
+  readonly maxMinor: Paise;
+  readonly isLeading: boolean;
+  readonly currentPriceMinor: Paise;
+  readonly minNextBidMinor: Paise;
+  readonly seq: number;
+}
+
+export type MaxBidDecision =
+  | (Transition & { readonly ok: true; readonly outcome: MaxBidOutcome })
+  | (Transition & { readonly ok: false; readonly error: DomainError });
+
+/**
+ * Sets (or replaces) the caller's hidden maximum and resolves it against the field in the same
+ * command. Checks, in order (ADR 004 › Proxy bidding):
+ *   1. resolve time   2. auction is LIVE   3. valid amount   4. ≤ absolute ceiling
+ *   5. ≥ minimum next bid (also bounds lowering: never below current exposure)
+ *   6. ≤ fat-finger limit max(minNext, 3 × reference)  — same BID_UNREASONABLE rule as bids
+ * The leader may raise (or lower, while ≥ minNext) their own maximum: no public bid unless the
+ * reserve rule lifts the price. Re-sending the current maximum is a no-op that keeps priority.
+ */
+export function setMaxBid(state: AuctionState, cmd: SetMaxBidCommand): MaxBidDecision {
+  assertNow(cmd.now);
+  if (typeof cmd.userId !== "string" || cmd.userId.length === 0) {
+    throw new DomainInvariantError("userId must come from the authenticated session");
+  }
+  if (typeof cmd.bidId !== "string" || cmd.bidId.length === 0)
+    throw new DomainInvariantError("bidId required");
+
+  const t = tick(state, cmd.now);
+  const log = new EventLog(t.state);
+  log.events.push(...t.events);
+  const s = log.state;
+  if (s.status === "CANCELLED")
+    return log.fail(domainError("AUCTION_CANCELLED", "This auction was cancelled"));
+  if (s.status === "ENDED") return log.fail(domainError("AUCTION_ENDED", "This auction has ended"));
+  if (s.status !== "LIVE")
+    return log.fail(domainError("AUCTION_NOT_LIVE", "This auction has not started"));
+
+  const max = cmd.maxMinor;
+  if (!isValidAmount(max, Number.MAX_SAFE_INTEGER)) {
+    return log.fail(
+      domainError("BID_INVALID_AMOUNT", "Maximum must be a positive whole number of paise"),
+    );
+  }
+  const required = minNextBidFor(s);
+  if (max > s.rules.limits.maxAmountMinor) {
+    return log.fail(
+      domainError("BID_UNREASONABLE", "Maximum exceeds the limit for this auction", {
+        maxAcceptableMinor: maxAcceptableBid(s),
+        minNextBidMinor: required,
+      }),
+    );
+  }
+  if (max < required) {
+    return log.fail(
+      domainError("BID_TOO_LOW", "Maximum is below the minimum next bid", {
+        minNextBidMinor: required,
+      }),
+    );
+  }
+  const ceiling = maxAcceptableBid(s);
+  if (max > ceiling) {
+    return log.fail(
+      domainError("BID_UNREASONABLE", "Maximum is far above the current price. Check the amount.", {
+        maxAcceptableMinor: ceiling,
+        minNextBidMinor: required,
+      }),
+    );
+  }
+
+  const existing = proxyOf(s, cmd.userId);
+  if (!existing || existing.maxMinor !== max) {
+    // Provisionally last in priority; the real setSeq is the seq once this command commits.
+    const provisional: ProxyBid = {
+      userId: cmd.userId,
+      maxMinor: max,
+      setSeq: Number.MAX_SAFE_INTEGER,
+      updatedAt: cmd.now,
+    };
+    log.state = {
+      ...s,
+      proxies: [...s.proxies.filter((p) => p.userId !== cmd.userId), provisional],
+    };
+    const bidsBefore = log.state.bidCount;
+    resolveProxies(log, cmd.now, stepIds(cmd.bidId));
+    if (log.state.bidCount > bidsBefore) applySoftClose(log, cmd.now);
+    const setSeq = log.state.seq;
+    log.state = {
+      ...log.state,
+      proxies: log.state.proxies.map((p) => (p.userId === cmd.userId ? { ...p, setSeq } : p)),
+    };
+  }
+  const f = log.state;
+  if (f.currentPriceMinor === null) throw new DomainInvariantError("A maximum left no price");
   return {
     ok: true,
-    state: log.state,
+    state: f,
     events: log.events,
-    bid: { bidId: cmd.bidId, seq: bidSeq, amountMinor: amount },
+    outcome: {
+      maxMinor: max,
+      isLeading: f.leaderUserId === cmd.userId,
+      currentPriceMinor: f.currentPriceMinor,
+      minNextBidMinor: minNextBidFor(f),
+      seq: f.seq,
+    },
   };
 }
 

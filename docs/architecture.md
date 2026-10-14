@@ -187,3 +187,90 @@ POST /auctions/:id/bids ─(201 {seq})─▶ feed.noteOwnBid → "You're leading
 - Projection lag/failures are visible in ops and logs; Analytics Engine metrics and alerting are Day 8.
 - Soft-close boundaries are proven at the domain level (ms-exact); DO tests check integration with real time.
 - Worker test files run sequentially (parallel runs on 2 cores hung intermittently; root cause not isolated).
+
+## Observability (Day 8)
+
+Runbook: [`docs/runbook.md`](runbook.md). API: [`docs/api.md`](api.md) → _Admin observability_.
+
+### Log schema (Workers Logs, one JSON object per line)
+
+`apps/worker/src/lib/logger.ts`. Every line: `ts` (ISO 8601), `level`, `event` (the operation, dotted:
+`http.request`, `auction.bid.accepted`, `auction.projection.failed`, `auction.alarm_failed`, …), plus
+context. Request-scoped lines also carry `requestId`, `version`, `environment`, `colo`. The **completion
+line** (`event: "http.request"`, one per request, `middleware/request-context.ts`) has `method`, `route`
+(the matched _pattern_, e.g. `/api/v1/auctions/:id/bids`, or `unmatched` — never the raw URL or query),
+`status`, `durationMs`, `code` (RFC 9457 problem code on errors) and `auctionId` when the path names one;
+5xx lines are `level: "error"`. Auction-object lines carry `auctionId`, `requestId` and `seq`. Errors are
+logged as `errorName` + `errorMessage` (≤ 500 chars), never stacks with request data.
+
+**Never logged** (enforced by `redact()` at any depth as a safety net, tested in `test/ops.test.ts`): any
+key matching `/pass|token|cookie|secret|authorization|email|reserve|max|session|^ip$|…connecting-ip|forwarded|real-ip/i`
+→ `"[REDACTED]"`; e-mail addresses inside free text → `[email]`. So no passwords, session tokens,
+cookies, client IPs, e-mails, reserve amounts or hidden maxima. User ids appear only where needed for
+security investigations (security events store HMACs, not raw IPs/e-mails).
+
+### Metric schema (Workers Analytics Engine, dataset `bike_auction_metrics`, binding `METRICS`)
+
+`apps/worker/src/lib/metrics.ts`. **Optional binding:** unbound (tests without it, a deploy that strips
+it) → every write is a no-op; a throwing binding is swallowed — metrics can never fail a request or a bid.
+
+| Field     | Content                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------- |
+| `index1`  | `auctionId` for auction events, else `"<METHOD> <route pattern>"` (sampling key)                  |
+| `blob1`   | event (table below)                                                                               |
+| `blob2`   | `"<METHOD> <route pattern>"` or `""`                                                              |
+| `blob3`   | status class `2xx`…`5xx` or `""`                                                                  |
+| `blob4`   | outcome: problem `ErrorCode`, `MANUAL`, `ok`/`error`, WS close code, lifecycle kind (all bounded) |
+| `blob5`   | exact HTTP status (`"429"`) or `""`                                                               |
+| `blob6`   | colo (≈ 300 values) · `blob7` version (git SHA)                                                   |
+| `double1` | `durationMs` · `double2` `count` · `double3` event-specific value                                 |
+
+| Event                              | Where                 | outcome / doubles                                                                                    |
+| ---------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------- |
+| `http_request`                     | request middleware    | problem code or `ok`; d1 = I/O duration                                                              |
+| `auth_security`                    | request middleware    | `/auth/*` non-2xx by code (`INVALID_CREDENTIALS`, `RATE_LIMITED`, `CAPTCHA_FAILED` …)                |
+| `bid_accepted` / `bid_rejected`    | `AuctionDO.placeBid`  | `MANUAL` / rejection code; d1 = in-object processing latency, d2 = bids committed (incl. automatic)  |
+| `max_bid_set` / `max_bid_rejected` | `AuctionDO.setMaxBid` | `ok` / code; d2 = automatic bids committed (the maximum itself is never recorded)                    |
+| `ws_connect` / `ws_disconnect`     | `AuctionDO`           | `user`·`anon` / close code; d2 = open sockets after; d3 = 1 for an abnormal close (≠ 1000/1001/1005) |
+| `ws_error`                         | `AuctionDO`           | socket errors                                                                                        |
+| `projection_lag`                   | outbox drain success  | d1 = age of the oldest projected event, d2 = events, d3 = still pending                              |
+| `projection_failure`               | outbox drain failure  | `d1_error`; d3 = consecutive failures                                                                |
+| `alarm_run`                        | `AuctionDO.alarm`     | `ok`/`error`; d1 = duration, d2 = due timers                                                         |
+| `auction_lifecycle`                | publish               | `started`·`extended`·`cancelled`·`ended:<outcome>`; d1 (ended) = commit delay after `closesAt`       |
+| `do_rpc_failure`                   | ops summary           | an object RPC threw                                                                                  |
+
+Cardinality is bounded by construction (enums, codes, route patterns, auction ids). No user ids,
+e-mails, IPs, reserves or maxima. Free plan: 100k data points written and 10k read queries per day;
+Analytics Engine is currently not billed. Every request writes ≥ 1 point, so the AE budget tracks the
+Workers 100k-requests/day budget. Query example (AE SQL API):
+`SELECT blob4, SUM(_sample_interval) FROM bike_auction_metrics WHERE blob1='bid_rejected' AND timestamp > NOW() - INTERVAL '1' HOUR GROUP BY blob4`.
+
+### Ops UI and health
+
+- `/admin/ops`: overall status (ok / degraded / down), live auctions (≤ 50, closing soonest) with
+  health badge, viewers (open sockets), seq vs projected seq, outbox backlog + oldest pending age, bids
+  in the last 5 min, last successful D1 sync, sync errors, and a warnings list (stuck/failing projection,
+  unreachable object, overdue deadline or timer, failed alarm, stale read model). Auto-refresh every 10 s
+  only while the tab is visible; "Retry projection" per auction. Values an object did not report show
+  as "Unavailable", never as 0.
+- `/admin/auctions/:id`: authoritative state over the read-only live feed (price, bids, accepted seq,
+  leader pseudonym, deadline, extensions, reserve met — no amount), ops (viewers, projection, last sync,
+  failures, timers with overdue marker), the pseudonymous ledger (with kind, "Load older"), cancel with
+  reason (two-step confirm) and retry projection.
+- `/admin/audit`: filters by action, admin, affected record id and IST date range; keyset pagination.
+- Health: public `GET /health` (liveness) and `GET /status` (version + D1) are minimal by design;
+  admins get `GET /admin/ops/health` (D1 latency, metrics binding, stale read-model scan).
+
+**Anomaly rules** (grace 60 s, `OPS_GRACE_MS`): object `LIVE` with `closesAt` passed, or `SCHEDULED` with
+`startsAt` passed → `DEADLINE_OVERDUE`; any timer due > grace ago → `TIMER_OVERDUE` (alarm late/failing);
+D1 row still `LIVE`/`SCHEDULED` past its close (or `SCHEDULED` past its start) → `READ_MODEL_STALE`
+(either the alarm or the projection is stuck; buyers don't see it because lists use the effective status);
+pending events older than the 5 s projection SLO → lagging; any failed attempt → failing.
+
+### Known limitations (Day 8)
+
+- `lastAlarmError` is in object memory (lost on eviction); the durable record is the log line + metric.
+- `audit_log` has no `created_at` index (a migration was out of scope for this change); fine at demo
+  volume, add `CREATE INDEX idx_audit_created ON audit_log (created_at, id)` before it grows.
+- p95 latency and rejects-by-reason charts are AE SQL queries (runbook), not rendered in the UI yet.
+- Alerting (webhook at 70 % of quota) is not implemented.

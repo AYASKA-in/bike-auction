@@ -36,6 +36,12 @@ export type LiveState = {
   historyDirty: boolean;
   /** Local time of the last authoritative update (socket message or HTTP view). */
   syncedAt: number | null;
+  /**
+   * This viewer's public pseudonym in this auction (stable per auction), learned from an
+   * authoritative source: a view where we lead, or `isYou` history rows. Lets automatic (proxy)
+   * bids placed on our behalf count as ours.
+   */
+  myBidder: string | null;
 };
 
 export const initialLive: LiveState = {
@@ -51,6 +57,7 @@ export const initialLive: LiveState = {
   olderCursor: undefined,
   historyDirty: false,
   syncedAt: null,
+  myBidder: null,
 };
 
 export const initialFor = (auctionId: string): LiveState => ({ ...initialLive, auctionId });
@@ -92,6 +99,7 @@ function replaceView(s: LiveState, view: PublicAuctionView, at: number): LiveSta
   }
   return {
     ...s,
+    myBidder: nowLeading && view.leadingBidder ? view.leadingBidder : s.myBidder,
     view,
     lastSeq: view.seq,
     leaderSeq: null,
@@ -129,12 +137,17 @@ export function applyMessage(s: LiveState, m: WsServerMessage, receivedAt: numbe
   const base = { ...s, lastSeq: m.seq, syncedAt: receivedAt };
   switch (m.type) {
     case "bid.accepted": {
-      const mine = s.ownSeqs.includes(m.seq);
+      const mine = s.ownSeqs.includes(m.seq) || (s.myBidder !== null && m.bidder === s.myBidder);
       const wasLeading = v.viewer?.isLeading === true;
+      // A rival bid strictly below our standing maximum is answered by our proxy in the SAME atomic
+      // commit (the engine guarantees it), so we keep the lead: no false "outbid" flash/vibration.
+      const myMax = v.viewer?.myMaxMinor ?? null;
+      const defended = !mine && wasLeading && myMax !== null && m.amountMinor < myMax;
+      const leading = mine || defended;
       return {
         ...base,
         leaderSeq: m.seq,
-        outbid: mine
+        outbid: leading
           ? null
           : wasLeading
             ? { currentPriceMinor: m.amountMinor, minNextBidMinor: m.minNextBidMinor }
@@ -147,6 +160,7 @@ export function applyMessage(s: LiveState, m: WsServerMessage, receivedAt: numbe
             amountMinor: m.amountMinor,
             at: m.at,
             isYou: mine,
+            ...(m.kind ? { kind: m.kind } : {}),
           },
         ]),
         view: {
@@ -158,7 +172,7 @@ export function applyMessage(s: LiveState, m: WsServerMessage, receivedAt: numbe
           reserveMet: m.reserveMet,
           leadingBidder: m.bidder,
           closesAt: m.closesAt,
-          viewer: v.viewer ? { ...v.viewer, isLeading: mine } : null,
+          viewer: v.viewer ? { ...v.viewer, isLeading: leading } : null,
         },
       };
     }
@@ -221,6 +235,8 @@ export function reduceLive(s: LiveState, a: LiveAction): LiveState {
     case "ownBid": {
       const ownSeqs = withSeq(s.ownSeqs, a.seq);
       const bids = s.bids.map((b) => (b.seq === a.seq ? { ...b, isYou: true } : b));
+      const row = s.bids.find((b) => b.seq === a.seq);
+      if (row) s = { ...s, myBidder: row.bidder };
       if (!s.view || a.seq > s.lastSeq) return { ...s, ownSeqs, bids }; // event not here yet
       const v = s.view;
       if (s.leaderSeq === a.seq && v.viewer) {
@@ -249,11 +265,17 @@ export function reduceLive(s: LiveState, a: LiveAction): LiveState {
     }
     case "history": {
       let ownSeqs = s.ownSeqs;
-      for (const b of a.items) if (b.isYou) ownSeqs = withSeq(ownSeqs, b.seq);
+      let myBidder = s.myBidder;
+      for (const b of a.items)
+        if (b.isYou) {
+          ownSeqs = withSeq(ownSeqs, b.seq);
+          myBidder = b.bidder;
+        }
       // Rows newer than lastSeq are fine to show (they're committed); the view catches up via events.
       return {
         ...s,
         ownSeqs,
+        myBidder,
         bids: mergeBids(s.bids, a.items),
         olderCursor: a.older || s.olderCursor === undefined ? a.nextBeforeSeq : s.olderCursor,
         historyDirty: a.older ? s.historyDirty : false,

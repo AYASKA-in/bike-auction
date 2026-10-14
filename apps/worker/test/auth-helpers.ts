@@ -1,3 +1,4 @@
+import { CURRENT_SIGN_UP_CONSENT } from "@bike/contracts";
 import { exports } from "cloudflare:workers";
 import { vi } from "vitest";
 
@@ -78,7 +79,13 @@ export async function signUp(
   password = "Kickstart-Pulsar-220",
   name = "Test Rider",
 ) {
-  const res = await post("/api/v1/auth/sign-up/email", { email, password, name });
+  // Consent to the current Privacy Notice is required for sign-up (Day 8, test/privacy.test.ts).
+  const res = await post("/api/v1/auth/sign-up/email", {
+    email,
+    password,
+    name,
+    consent: CURRENT_SIGN_UP_CONSENT,
+  });
   return { res, email, password, cookie: cookieFrom(res) };
 }
 

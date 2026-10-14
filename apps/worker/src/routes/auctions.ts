@@ -1,5 +1,5 @@
-import { IdempotencyKeyHeader, PlaceBidBody, type ErrorCode } from "@bike/contracts";
-import type { StoredBidResult } from "@bike/domain";
+import { IdempotencyKeyHeader, PlaceBidBody, SetMaxBidBody, type ErrorCode } from "@bike/contracts";
+import type { StoredBidResult, StoredMaxBidResult } from "@bike/domain";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { AppError, problemBody, problemResponse } from "../lib/problem";
@@ -115,6 +115,8 @@ auctionRoutes.post("/:id/bids", requireUser, async (c) => {
   switch (r.kind) {
     case "not_found":
       throw new AppError("NOT_FOUND", "Auction not found");
+    case "account_closed":
+      throw new AppError("FORBIDDEN", "This account has been closed.");
     case "conflict":
       throw new AppError(
         "IDEMPOTENCY_KEY_REUSED",
@@ -131,6 +133,87 @@ auctionRoutes.post("/:id/bids", requireUser, async (c) => {
       return bidResponse(c, r.result, r.replayed);
   }
 });
+
+const MAX_BID_DETAIL: Partial<Record<ErrorCode, string>> = {
+  ...BID_DETAIL,
+  BID_TOO_LOW: "Your maximum must be at least the minimum next bid.",
+  BID_UNREASONABLE: "That maximum is far above the current price. Check it and try again.",
+};
+
+/**
+ * Set (or replace) your hidden maximum bid (proxy bidding, BLUEPRINT §4.7). USER only, requires an
+ * `Idempotency-Key`. The 200 body is returned only to the owner; the maximum itself never appears
+ * in any public view, event, history row or projection. Automatic bids it causes are ordinary
+ * public bids with `kind: "PROXY"`. A maximum can be raised, or lowered while it stays ≥ the
+ * minimum next bid; there is no DELETE (an active maximum is a commitment like a bid).
+ */
+auctionRoutes.put("/:id/max-bid", requireUser, async (c) => {
+  const user = c.get("user")!;
+  if (user.role === "ADMIN") throw new AppError("FORBIDDEN", "Administrators cannot bid");
+  const key = IdempotencyKeyHeader.safeParse(c.req.header("idempotency-key"));
+  if (!key.success) {
+    throw new AppError(
+      "VALIDATION_FAILED",
+      "Send an Idempotency-Key header (16–128 letters, digits, - or _)",
+    );
+  }
+  const body = SetMaxBidBody.safeParse(await c.req.json().catch(() => null));
+  if (!body.success)
+    throw new AppError("BID_INVALID_AMOUNT", "Send { maxMinor: <positive whole paise> }");
+  const id = parseId(c);
+
+  if (c.env.BID_RATE_LIMIT) {
+    const { success } = await c.env.BID_RATE_LIMIT.limit({ key: `bid:${user.id}` });
+    if (!success) {
+      return problemResponse(
+        problemBody("RATE_LIMITED", c.get("requestId"), "You're bidding very fast."),
+        { "retry-after": "10" },
+      );
+    }
+  }
+
+  const r = await auctionStub(c.env, id).setMaxBid({
+    userId: user.id,
+    maxMinor: body.data.maxMinor,
+    idempotencyKey: key.data,
+    requestId: c.get("requestId"),
+  });
+  switch (r.kind) {
+    case "not_found":
+      throw new AppError("NOT_FOUND", "Auction not found");
+    case "account_closed":
+      throw new AppError("FORBIDDEN", "This account has been closed.");
+    case "conflict":
+      throw new AppError(
+        "IDEMPOTENCY_KEY_REUSED",
+        "This Idempotency-Key was already used for a different request",
+      );
+    case "rate_limited":
+      return problemResponse(
+        problemBody("RATE_LIMITED", c.get("requestId"), "You're bidding very fast."),
+        { "retry-after": String(Math.ceil(r.retryAfterMs / 1000)) },
+      );
+    case "evaluated":
+      return maxBidResponse(c, r.result, r.replayed);
+  }
+});
+
+function maxBidResponse(
+  c: Context<AppEnv>,
+  result: StoredMaxBidResult,
+  replayed: boolean,
+): Response {
+  const headers = { "Idempotent-Replayed": String(replayed), "Cache-Control": "no-store" };
+  if (result.ok) {
+    const { ok: _ok, ...body } = result;
+    return c.json(body, 200, headers);
+  }
+  const { ok: _ok, code, ...extensions } = result;
+  return problemResponse(
+    problemBody(code, c.get("requestId"), MAX_BID_DETAIL[code], extensions),
+    headers,
+  );
+}
 
 /**
  * Live event stream. Browsers do not apply CORS to WebSockets, so Origin is checked explicitly

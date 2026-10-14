@@ -316,3 +316,48 @@ describe("countdown extension and lifecycle", () => {
     expect(s.outbid).toBeNull();
   });
 });
+
+describe("proxy (automatic) bids", () => {
+  const leadingWithMax = (max: number | null) =>
+    applyMessage(
+      initialFor("auc-1"),
+      snapMsg(
+        view({
+          seq: 6,
+          currentPriceMinor: 200,
+          leadingBidder: "Bidder MINE",
+          viewer: { isLeading: true, isWinner: false, myMaxMinor: max },
+        }),
+      ),
+      0,
+    );
+  it("learns our pseudonym from an authoritative view and treats our proxy bids as ours", () => {
+    const s = leadingWithMax(1_000);
+    expect(s.myBidder).toBe("Bidder MINE");
+    // A rival bids below our max → our proxy answers in the same commit: no outbid flash.
+    const rival = applyMessage(s, bidEv(7, 500, "Bidder RIVL"), 0);
+    expect(rival.outbid).toBeNull();
+    expect(rival.view?.viewer?.isLeading).toBe(true);
+    const counter = applyMessage(rival, bidEv(8, 525, "Bidder MINE"), 0);
+    expect(counter.view?.viewer?.isLeading).toBe(true);
+    expect(counter.bids.find((b) => b.seq === 8)?.isYou).toBe(true);
+  });
+  it("a rival bid at or above our max outbids us", () => {
+    const s = applyMessage(leadingWithMax(1_000), bidEv(7, 1_100, "Bidder RIVL"), 0);
+    expect(s.view?.viewer?.isLeading).toBe(false);
+    expect(s.outbid).toEqual({ currentPriceMinor: 1_100, minNextBidMinor: 26_100 });
+  });
+  it("without a max, a rival bid outbids us as before", () => {
+    const s = applyMessage(leadingWithMax(null), bidEv(7, 300, "Bidder RIVL"), 0);
+    expect(s.outbid).not.toBeNull();
+  });
+  it("learns the pseudonym from isYou history rows", () => {
+    const s = reduceLive(live, {
+      kind: "history",
+      items: [{ ...row(4, true), bidder: "Bidder HIST" }],
+      nextBeforeSeq: null,
+      older: false,
+    });
+    expect(s.myBidder).toBe("Bidder HIST");
+  });
+});

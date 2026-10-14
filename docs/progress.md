@@ -211,6 +211,52 @@ restart) **passed**; Day-5 `journey.py` **passed**.
 
 **Still unverified:** real Cloudflare (you run `pnpm deploy`).
 
-## Next: Day 7
+## Day 7 (13–14 Oct 2026): buyer experience and proxy bidding, complete locally
 
-Per the blueprint. Ready: live feed and reducer to build the full bidding UI on, multi-user e2e harness.
+**Built (3 parallel agents + integration):** live page polish (quick-bid chips from the real increment ladder, price
+flash, outbid banner with one-tap rebid, title flash + vibration, soft-close and "+2:00 extended" notices, absolute end
+time, minimum refreshed from rejections, modal confirm, focused announcements, relative bid times, mobile accordions,
+error boundary); **proxy bidding** in the engine, DO (schema v4), API (`PUT /auctions/:id/max-bid`) and UI (eBay-style
+resolution, earlier max wins ties, reserve jump, one extension per command, maxima visible only to their owner); **My
+Bids** (Leading/Outbid/Won/Lost) and **Watchlist** (migration 0005); catalogue engine-size bands, removable filter
+chips, "recently ended" sort, home shelves.
+
+**Bugs found and fixed:** a defended proxy flashed a false "outbid" (reducer now treats own proxy bids as ours and a
+rival bid below our standing max as defended); simultaneous-bid e2e step was racy (requests now held and released
+together); proxy counter-bids vs the hard cap had no test (added).
+
+## Day 8 (14 Oct 2026): UI/UX, operations, security and privacy, complete locally
+
+**Built (3 parallel agents + integration):** design system and light/dark/system themes (no flash, contrast ≥ 4.5:1 on
+every pair), mobile menu, consistent buyer + admin pages, 404, empty/loading/error states; structured JSON logs with
+recursive redaction, Analytics Engine metrics (no-op when unbound), `/admin/ops`, `/admin/auctions/:id` (ledger,
+timers, cancel), `/admin/audit` (filters, pagination), `docs/runbook.md`; CSP and security headers on API and SPA,
+rate-limit audit with new limits, consent at sign-up (notice version recorded), `/account` with export and deletion,
+daily retention cron with configurable periods, `docs/threat-model.md`, `docs/privacy.md` (not legal advice).
+
+**Independent review (Days 7–8):** 1 high, 2 medium, 5 low, 1 info.
+
+- **HIGH-1 fixed:** account deletion only checked auctions already projected to D1, so a just-set maximum could keep
+  bidding (and win) for an erased account. Deletion now asks every open/recent auction's DO, which atomically refuses
+  or _retires_ the user (no further bids or maxima; DO schema v5); all-or-nothing with rollback. Regression tests added.
+- **MEDIUM fixed:** 200-auction cap silently skipped candidates (now 1,000 and fail closed); sequential DO fan-out in
+  export/deletion (now bounded-parallel with timeouts).
+- **LOW fixed:** admin ledger "leading" on ended auctions; proxy-max confirmation lost focus (now the modal dialog).
+- **LOW/INFO documented:** reserve inferable on a reserve jump (eBay-like), soft admin write budget, per-IP WS connect
+  limit, maxima also in the owner's 24 h idempotency record.
+
+**Other bugs found and fixed:** low contrast on orange buttons, Live badge, green and outcome labels; invalid `<dl>`
+markup on the desk KPIs; watchlist unwatch error disappearing; desk table causing horizontal page overflow on mobile;
+full Worker suite hang (an alarm racing restart/teardown in one recovery test; test made deterministic); stale tests
+after the stricter API CSP and environment-specific metric labels; theme script not linted.
+
+**Verification:** `pnpm check` passes end to end (562 tests: contracts 6, domain 164, web 94, worker 298; 324 s);
+browser suites and axe: see the Day-8 report. Local e2e runs skip captcha (sandbox can't reach Cloudflare's captcha
+service; the Worker refuses to skip it outside development).
+
+**Still unverified:** everything on real Cloudflare (deploy, R2, Turnstile under CSP, cron, Analytics Engine).
+
+## Next: Day 9
+
+Reliability and demo readiness: load and concurrency tests on a local or staging stack, fault injection (D1 outage,
+alarm storms), demo-data reset, frontend performance, production-readiness assessment.

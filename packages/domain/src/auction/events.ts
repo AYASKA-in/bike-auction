@@ -1,5 +1,5 @@
 import type { Paise } from "../money";
-import type { AuctionOutcome, AuctionStatus } from "./types";
+import type { AuctionOutcome, AuctionStatus, BidKind } from "./types";
 
 /**
  * Internal domain events. Each has a `seq` that is exactly previous seq + 1 within one auction,
@@ -33,6 +33,8 @@ export type AuctionEvent =
       readonly bidId: string;
       readonly userId: string;
       readonly amountMinor: Paise;
+      /** MANUAL = placed by the bidder; PROXY = placed automatically from their hidden maximum. */
+      readonly kind: BidKind;
       readonly previousPriceMinor: Paise | null;
       readonly minNextBidMinor: Paise;
       readonly reserveMet: boolean;

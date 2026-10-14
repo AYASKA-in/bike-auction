@@ -1,7 +1,21 @@
+import { ConsentPurpose, PRIVACY_NOTICE_VERSION, SignUpConsent } from "@bike/contracts";
 import { betterAuth } from "better-auth";
+import { APIError } from "better-auth/api";
 import { captcha } from "better-auth/plugins";
+import { newId } from "../lib/ids";
 import { allowedOrigins } from "../middleware/security";
 import { hasherStub } from "./password-hasher-do";
+
+/** One row per purpose the sign-up notice covers (today: one). */
+export async function recordSignUpConsent(env: Env, userId: string, at: number): Promise<void> {
+  await env.DB.batch(
+    ConsentPurpose.options.map((purpose) =>
+      env.DB.prepare(
+        `INSERT INTO consents (id, user_id, purpose, version, at) VALUES (?, ?, ?, ?, ?)`,
+      ).bind(newId("cns"), userId, purpose, PRIVACY_NOTICE_VERSION, at),
+    ),
+  );
+}
 
 export const AUTH_BASE_PATH = "/api/v1/auth";
 export const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -53,6 +67,35 @@ export function createAuth(env: Env, request: Request) {
       },
     },
     session: { expiresIn: SESSION_TTL_SECONDS, updateAge: 24 * 60 * 60 },
+    // DPDP consent (docs/privacy.md). Enforced at user creation, i.e. after Better Auth's own
+    // checks (captcha, duplicate email), so those keep their specific error codes.
+    databaseHooks: {
+      user: {
+        create: {
+          before: async (_user, ctx) => {
+            // Server-side calls (operator seeding of fictional demo accounts) carry no HTTP
+            // request; every public sign-up does, and must carry consent.
+            if (!ctx?.request) return;
+            if (!SignUpConsent.safeParse((ctx.body as { consent?: unknown })?.consent).success) {
+              throw new APIError("BAD_REQUEST", {
+                code: "CONSENT_REQUIRED",
+                message: "Agree to the Privacy Notice and Terms to create an account.",
+              });
+            }
+          },
+          after: async (user, ctx) => {
+            if (!ctx?.request) return;
+            try {
+              await recordSignUpConsent(env, user.id, Date.now());
+            } catch (err) {
+              // No consent record → no account: compensate, then fail the sign-up.
+              await env.DB.prepare(`DELETE FROM "user" WHERE id = ?`).bind(user.id).run();
+              throw err;
+            }
+          },
+        },
+      },
+    },
     // Abuse controls live in our own layer (rate-limit binding + per-account backoff), because
     // Better Auth's in-memory limiter is per-isolate on Workers.
     rateLimit: { enabled: false },

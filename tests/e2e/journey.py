@@ -95,7 +95,7 @@ with sync_playwright() as p:
     b.goto(f"{BASE}/auctions?q={MODEL.split()[-1]}")
     b.get_by_role("link", name=f"Royal Enfield {MODEL}").click()
     expect(b.get_by_role("heading", name="Inspection report")).to_be_visible(timeout=15000)
-    expect(b.get_by_text("Live updates connected")).to_be_visible(timeout=15000)
+    expect(b.locator("[data-conn=\"live\"]")).to_be_visible(timeout=15000)
     expect(b.get_by_text("Reserve not met")).to_be_visible()
     assert "165000" not in b.content() and "1,65,000" not in b.content(), "reserve leaked to buyer page"
     step("detail page: photo, inspection, live feed, reserve hidden")

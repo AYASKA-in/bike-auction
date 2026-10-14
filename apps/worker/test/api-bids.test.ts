@@ -65,7 +65,8 @@ describe("POST /auctions/:id/bids", () => {
     const bobView = PublicAuctionView.parse(
       await (await api("GET", `/auctions/${id}`, { cookie: bob })).json(),
     );
-    expect(bobView.viewer).toEqual({ isLeading: false, isWinner: false });
+    // Day 7: viewer also carries the viewer's own hidden maximum (none here).
+    expect(bobView.viewer).toEqual({ isLeading: false, isWinner: false, myMaxMinor: null });
   });
 
   it("authentication and authorization", async () => {

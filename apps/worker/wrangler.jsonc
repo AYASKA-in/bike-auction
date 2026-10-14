@@ -42,7 +42,15 @@
   // and image upload answers 503 (listings show placeholders). See README → Deployment.
   "r2_buckets": [{ "binding": "IMAGES", "bucket_name": "bike-auction-images" }],
 
+  // Metrics (BLUEPRINT §10). Workers Analytics Engine is available on the free plan and is not
+  // billed; the dataset is created on first write. Optional at runtime: unbound → metrics no-op.
+  "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "bike_auction_metrics" }],
+  // Daily data-retention purge (src/lib/retention.ts) at 21:47 UTC = 03:17 IST, off-peak.
+  // Cron Triggers are included in the Free plan.
+  "triggers": { "crons": ["47 21 * * *"] },
+
   // Coarse, per-location, eventually consistent edge limits (BLUEPRINT §7.5).
+  // Key prefixes per use and the full endpoint table: docs/threat-model.md → Rate limits.
   "ratelimits": [
     { "name": "AUTH_RATE_LIMIT", "namespace_id": "4101", "simple": { "limit": 20, "period": 60 } },
     // Coarse per-user bid limit at the edge; the exact per-auction throttle lives in AuctionDO.
@@ -59,5 +67,12 @@
     "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
     // Shows the public reviewer demo accounts on the sign-in page.
     "DEMO_MODE": "true",
+    // Retention periods (src/lib/retention.ts, docs/privacy.md). Invalid values fall back to the
+    // defaults; security logs can't go below 365 days.
+    "RETENTION_SECURITY_EVENTS_DAYS": "365",
+    "RETENTION_WATCHLIST_AFTER_END_DAYS": "90",
+    "RETENTION_LOGIN_THROTTLE_HOURS": "24",
+    "RETENTION_ACCOUNT_DELETIONS_DAYS": "365",
+    "RETENTION_ORPHAN_UPLOAD_HOURS": "24",
   },
 }

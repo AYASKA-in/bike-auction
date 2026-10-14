@@ -9,7 +9,10 @@ export type SecurityEventType =
   | "auth.sign_out"
   | "auth.captcha_failed"
   | "auth.rate_limited"
-  | "admin.seed";
+  | "admin.seed"
+  | "account.exported"
+  | "account.deleted"
+  | "account.delete_refused";
 
 export async function recordSecurityEvent(
   env: Env,

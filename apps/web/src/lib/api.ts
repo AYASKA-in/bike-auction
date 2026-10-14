@@ -8,9 +8,17 @@ export class ApiError extends Error {
     readonly detail?: string,
     readonly requestId?: string,
     readonly retryAfterSeconds?: number,
+    /** RFC 9457 extension members (e.g. `minNextBidMinor` on BID_TOO_LOW). Untrusted: validate. */
+    readonly extensions?: Readonly<Record<string, unknown>>,
   ) {
     super(detail ?? code);
   }
+}
+
+/** Problem members beyond the standard ones (type, title, status, code, detail, requestId). */
+function problemExtensions(p: ProblemDetails): Record<string, unknown> {
+  const { type: _t, title: _ti, status: _s, code: _c, detail: _d, requestId: _r, ...rest } = p;
+  return rest;
 }
 
 async function request<T>(path: string, init: RequestInit, parse: (x: unknown) => T): Promise<T> {
@@ -30,6 +38,7 @@ async function request<T>(path: string, init: RequestInit, parse: (x: unknown) =
       problem.success ? problem.data.detail : undefined,
       problem.success ? problem.data.requestId : undefined,
       Number.isFinite(retry) && retry > 0 ? retry : undefined,
+      problem.success ? problemExtensions(problem.data) : undefined,
     );
   }
   return parse(body);
@@ -68,13 +77,21 @@ export function apiSend<T>(
   path: string,
   body: unknown,
   parse: (x: unknown) => T,
+  /** Extra headers (e.g. Idempotency-Key). */
+  headers: Record<string, string> = {},
+  /** A timed-out request is reported as NETWORK (outcome unknown), never as a rejection. */
+  timeoutMs?: number,
 ): Promise<T> {
   return request(
     path,
     {
       method,
-      headers: body === undefined ? {} : { "content-type": "application/json" },
+      headers: {
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+        ...headers,
+      },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     },
     parse,
   );

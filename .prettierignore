@@ -6,3 +6,4 @@ coverage
 apps/web/src/routeTree.gen.ts
 apps/worker/worker-configuration.d.ts
 BLUEPRINT.md
+.claude
