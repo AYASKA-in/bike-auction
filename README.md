@@ -13,19 +13,20 @@ server" with its own SQLite database. Concurrent bids therefore get one provable
 > bidding, the hidden reserve, outbid alerts and the server-side close (details in
 > [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)). Photos use Workers KV (R2 is off); demo mode is off.
 
-|                                        |                                                                                 |
-| -------------------------------------- | ------------------------------------------------------------------------------- |
-| Demo guide and 3-minute script         | [`docs/DEMO.md`](docs/DEMO.md)                                                  |
-| Architecture                           | [`docs/architecture.md`](docs/architecture.md) · ADRs in [`docs/adr`](docs/adr) |
-| API and WebSocket protocol             | [`docs/api.md`](docs/api.md)                                                    |
-| Database                               | [`docs/database.md`](docs/database.md)                                          |
-| Reliability and performance (measured) | [`docs/reliability.md`](docs/reliability.md)                                    |
-| Security and threat model              | [`docs/threat-model.md`](docs/threat-model.md)                                  |
-| Privacy and retention (India DPDP)     | [`docs/privacy.md`](docs/privacy.md)                                            |
-| Operations runbook                     | [`docs/runbook.md`](docs/runbook.md)                                            |
-| Deployment checklist                   | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)                                      |
-| Progress log and decisions             | [`docs/progress.md`](docs/progress.md) · [`BLUEPRINT.md`](BLUEPRINT.md)         |
-| Screenshots                            | [`docs/screenshots/day8`](docs/screenshots/day8)                                |
+|                                            |                                                                                 |
+| ------------------------------------------ | ------------------------------------------------------------------------------- |
+| Demo guide and 3-minute script             | [`docs/DEMO.md`](docs/DEMO.md)                                                  |
+| Architecture                               | [`docs/architecture.md`](docs/architecture.md) · ADRs in [`docs/adr`](docs/adr) |
+| API and WebSocket protocol                 | [`docs/api.md`](docs/api.md)                                                    |
+| Database                                   | [`docs/database.md`](docs/database.md)                                          |
+| Reliability and performance (measured)     | [`docs/reliability.md`](docs/reliability.md)                                    |
+| Security and threat model                  | [`docs/threat-model.md`](docs/threat-model.md)                                  |
+| Privacy and retention (India DPDP)         | [`docs/privacy.md`](docs/privacy.md)                                            |
+| Operations runbook                         | [`docs/runbook.md`](docs/runbook.md)                                            |
+| Deployment checklist                       | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)                                      |
+| Your own copy on Cloudflare (step by step) | [`docs/CLOUD-SETUP.md`](docs/CLOUD-SETUP.md)                                    |
+| Progress log and decisions                 | [`docs/progress.md`](docs/progress.md) · [`BLUEPRINT.md`](BLUEPRINT.md)         |
+| Screenshots                                | [`docs/screenshots/day8`](docs/screenshots/day8)                                |
 
 ## Features
 
@@ -155,7 +156,8 @@ node scripts/deploy.mjs --turnstile-site-key <site key> --turnstile-secret-key <
 ```
 
 It creates the D1 database, builds, migrates, deploys, sets generated secrets (kept git-ignored), and checks
-health. Full checklist, flags (`--demo`, `--with-r2`, `--test-turnstile`), smoke test and rollback:
+health. **Setting up your own copy from a fresh clone:** [`docs/CLOUD-SETUP.md`](docs/CLOUD-SETUP.md) (step by step,
+free plan). Full checklist, flags (`--demo`, `--with-r2`, `--test-turnstile`), smoke test and rollback:
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Nothing here enables paid services. R2 (photos) stays off unless you pass
 `--with-r2`.
 

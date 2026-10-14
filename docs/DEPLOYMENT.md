@@ -1,5 +1,7 @@
 # Deployment checklist (Cloudflare Workers, free plan)
 
+> Setting up your own copy from a fresh clone? Follow the step-by-step guide in [`CLOUD-SETUP.md`](CLOUD-SETUP.md).
+
 **Status: deployed 14 Oct 2026** to https://bike-auction.skiranbot.workers.dev (version `6e3355d`), free plan,
 no R2, demo mode off.
 
@@ -140,5 +142,5 @@ D1 migrations are additive. To restore data, use D1 Time Travel:
 - **R2:** not enabled. It needs your approval.
 - **Other blockers:**
   - a custom domain, if wanted;
-  - backup arrangements (D1 Time Travel covers 30 days on the free plan; export for longer);
+  - backup arrangements (D1 Time Travel covers 7 days on the free plan, 30 on paid; export for longer);
   - legal review of the privacy notice.
