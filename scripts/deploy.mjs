@@ -165,6 +165,7 @@ step(`Deploying Worker (version ${version})`);
 const out = wrangler(
   [
     "deploy",
+    ...CFG,
     "--var",
     `APP_VERSION:${version}`,
     "--var",
