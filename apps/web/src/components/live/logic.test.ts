@@ -164,7 +164,7 @@ describe("outcomeCopy: the ended card", () => {
   it("winner, other bidders, reserve not met, no bids, cancelled", () => {
     const sold = view({ status: "ENDED", outcome: "SOLD", currentPriceMinor: 4_000_000 });
     expect(outcomeCopy({ ...sold, viewer: { isLeading: true, isWinner: true } })?.headline).toBe(
-      "You won at ₹40,000. Our team will contact you.",
+      "You won at ₹40,000.",
     );
     expect(outcomeCopy(sold)?.headline).toBe("Sold to Bidder K7Q2 for ₹40,000.");
     const rnm = outcomeCopy(view({ status: "ENDED", outcome: "RESERVE_NOT_MET" }));

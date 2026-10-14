@@ -27,6 +27,9 @@ server = None
 # the Worker then skips captcha ONLY because ENVIRONMENT=development (it refuses to start without a secret
 # anywhere else; see apps/worker/src/auth/auth.ts). Set E2E_TURNSTILE=1 to keep it on where reachable.
 CAPTCHA_OFF = [] if os.environ.get("E2E_TURNSTILE") == "1" else ["--var", "TURNSTILE_SECRET_KEY:"]
+# These journeys reuse the same buyers after they win, so the "pay before bidding again" rule is off here
+# (tests/e2e/settlement.py and the Worker tests cover it with the rule on).
+CAPTCHA_OFF += ["--var", "BLOCK_BIDDING_WHILE_OWING:false"]
 
 
 def step(msg): print(f"✓ {msg}", flush=True)
@@ -251,7 +254,7 @@ try:
             expect(pg.get_by_test_id("result")).to_be_visible(timeout=15000)
             expect(pg.locator("#bid-amount")).to_have_count(0)
             assert "-" not in text(pg, "countdown"), text(pg, "countdown")
-        expect(winner.get_by_test_id("result")).to_have_text("You won at ₹40,000. Our team will contact you.")
+        expect(winner.get_by_test_id("result")).to_have_text("You won at ₹40,000.")
         expect(loser.get_by_test_id("result")).to_contain_text("Sold to Bidder ")
         step("auction closed by the server: SOLD shown to both, winner told, bidding disabled, no negative countdown")
         loser.screenshot(path=f"{OUT}/detail-{'mobile' if loser is B else 'desktop'}-ended.png", full_page=False)

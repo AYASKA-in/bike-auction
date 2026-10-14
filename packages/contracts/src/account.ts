@@ -103,6 +103,35 @@ export const AccountExport = z.strictObject({
       youAreLeading: z.boolean(),
     }),
   ),
+  /** Purchases you won (or were offered) and their payments. */
+  purchases: z.array(
+    z.strictObject({
+      settlementId: z.string(),
+      auctionId: z.string(),
+      title: z.string(),
+      status: z.string(),
+      priceMinor: z.number().int().positive(),
+      payments: z.array(
+        z.strictObject({
+          amountMinor: z.number().int().positive(),
+          method: z.string(),
+          reference: z.string(),
+          status: z.string(),
+          reportedAt: Ms,
+        }),
+      ),
+    }),
+  ),
+  /** Participation deposits. */
+  deposits: z.array(
+    z.strictObject({
+      amountMinor: z.number().int().positive(),
+      method: z.string(),
+      reference: z.string(),
+      status: z.string(),
+      createdAt: Ms,
+    }),
+  ),
   /** Security log entries linked to your account (identifiers are not included). */
   securityEvents: z.array(z.strictObject({ type: z.string(), at: Ms, requestId: z.string() })),
   /** What is NOT in this file and why (DPDP transparency). */

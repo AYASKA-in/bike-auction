@@ -93,6 +93,17 @@ time, in order, and they're always correct."
 Optional extras: go offline in DevTools to see the "Offline" banner, the price marked "may be outdated" and bidding
 paused, then reconnect to catch up. Show Watchlist, the phone layout, and `/account` → Download my data.
 
+### Optional: after the win (1 minute)
+
+1. As the winner, open **Purchases** (the badge shows what needs action). The card says "Pay ₹X by …" with a
+   countdown, the price breakdown (fee 2% + GST 18% on the fee) and where to pay.
+2. Report a payment with any 12-character UTR, for example `UTR123456789`.
+3. As the admin, open **Auction desk → Settlements**, open the sale and click **Verify**. The buyer's card
+   moves to "Pay the balance".
+4. Record the balance as the admin. The buyer now sees a gate-pass code; **Mark collected** needs that code.
+
+Rules and edge cases (default, runner-up offer, deposits): [`settlement.md`](settlement.md).
+
 ## Technical talking points (for interview questions)
 
 **Why this architecture?**

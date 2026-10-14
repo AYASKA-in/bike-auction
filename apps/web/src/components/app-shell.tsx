@@ -1,6 +1,8 @@
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect, useId, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ServerClockProvider } from "@/lib/server-time";
+import { needsAction, purchasesQuery } from "@/lib/settlement";
 import { useMe, useSignOut } from "@/lib/session";
 import { SystemFooter } from "./system-footer";
 import { Button } from "./ui/button";
@@ -15,18 +17,29 @@ export function AppShell() {
   );
 }
 
-type NavItem = { to: "/auctions" | "/me/bids" | "/me/watchlist" | "/admin"; label: string };
+type NavItem = {
+  to: "/auctions" | "/me/bids" | "/me/watchlist" | "/me/purchases" | "/admin";
+  label: string;
+  /** Count of things needing action (shown as a badge). */
+  badge?: number;
+};
 
 function useNavItems(): NavItem[] {
   const me = useMe();
   const role = me.data?.role;
+  const purchases = useQuery({
+    ...purchasesQuery(me.data?.id ?? "-"),
+    enabled: role === "USER",
+  });
+  const due = (purchases.data?.items ?? []).filter(needsAction).length;
   return [
     { to: "/auctions", label: "Auctions" },
     ...(role === "USER"
       ? ([
           { to: "/me/bids", label: "My bids" },
           { to: "/me/watchlist", label: "Watchlist" },
-        ] as const)
+          { to: "/me/purchases", label: "Purchases", badge: due },
+        ] as NavItem[])
       : []),
     ...(role === "ADMIN" ? ([{ to: "/admin", label: "Auction desk" }] as const) : []),
   ];
@@ -94,6 +107,12 @@ function Header() {
               <li key={l.to}>
                 <Link to={l.to} className={navLink} activeProps={{ className: navActive }}>
                   {l.label}
+                  {l.badge ? (
+                    <span className="ml-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-hivis px-1.5 text-xs font-bold text-on-hivis tnum">
+                      {l.badge}
+                      <span className="sr-only"> need{l.badge === 1 ? "s" : ""} action</span>
+                    </span>
+                  ) : null}
                 </Link>
               </li>
             ))}
@@ -237,6 +256,12 @@ function MobileMenu({ items }: { items: NavItem[] }) {
                   }}
                 >
                   {l.label}
+                  {l.badge ? (
+                    <span className="ml-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-hivis px-1.5 text-xs font-bold text-on-hivis tnum">
+                      {l.badge}
+                      <span className="sr-only"> need{l.badge === 1 ? "s" : ""} action</span>
+                    </span>
+                  ) : null}
                 </Link>
               </li>
             ))}

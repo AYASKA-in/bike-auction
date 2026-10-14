@@ -11,6 +11,7 @@ import { AppShell } from "./components/app-shell";
 import { CatalogueSearch } from "./lib/catalogue-search";
 import { MyBidsSearch } from "./lib/me";
 import { AuditSearch } from "./lib/ops";
+import { SettlementsSearch } from "./lib/settlement-search";
 import { meQuery } from "./lib/session";
 import { HomePage } from "./routes/home";
 import { NotFoundPage } from "./routes/not-found";
@@ -83,6 +84,16 @@ const myBidsRoute = createRoute({
   path: "/bids",
   validateSearch: MyBidsSearch,
   component: lazyRouteComponent(() => import("./routes/my-bids"), "MyBidsPage"),
+});
+const purchasesRoute = createRoute({
+  getParentRoute: () => meRoute,
+  path: "/purchases",
+  component: lazyRouteComponent(() => import("./routes/purchases"), "PurchasesPage"),
+});
+const depositRoute = createRoute({
+  getParentRoute: () => meRoute,
+  path: "/deposit",
+  component: lazyRouteComponent(() => import("./routes/purchases"), "DepositPage"),
 });
 const watchlistRoute = createRoute({
   getParentRoute: () => meRoute,
@@ -157,6 +168,24 @@ const adminAuctionRoute = createRoute({
   component: lazyRouteComponent(() => import("./routes/admin-auction"), "AdminAuctionPage"),
 });
 
+// Settlement (docs/settlement.md): payments after the hammer, deposits.
+const adminSettlementsRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "/settlements",
+  validateSearch: SettlementsSearch,
+  component: lazyRouteComponent(() => import("./routes/admin-settlements"), "AdminSettlementsPage"),
+});
+const adminSettlementRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "/settlements/$settlementId",
+  component: lazyRouteComponent(() => import("./routes/admin-settlements"), "AdminSettlementPage"),
+});
+const adminDepositsRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "/deposits",
+  component: lazyRouteComponent(() => import("./routes/admin-settlements"), "AdminDepositsPage"),
+});
+
 export function createAppRouter(queryClient: QueryClient) {
   return createRouter({
     routeTree: rootRoute.addChildren([
@@ -165,7 +194,7 @@ export function createAppRouter(queryClient: QueryClient) {
       registerRoute,
       auctionsRoute,
       auctionDetailRoute,
-      meRoute.addChildren([myBidsRoute, watchlistRoute]),
+      meRoute.addChildren([myBidsRoute, watchlistRoute, purchasesRoute, depositRoute]),
       accountRoute,
       privacyRoute,
       adminRoute.addChildren([
@@ -176,6 +205,9 @@ export function createAppRouter(queryClient: QueryClient) {
         adminOpsRoute,
         adminAuditRoute,
         adminAuctionRoute,
+        adminSettlementsRoute,
+        adminSettlementRoute,
+        adminDepositsRoute,
       ]),
     ]),
     context: { queryClient },

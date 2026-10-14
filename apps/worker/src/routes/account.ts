@@ -119,35 +119,47 @@ accountRoutes.get("/me/export", requireUser, async (c) => {
   if (limited) return limited;
   const userId = c.get("user")!.id;
   const now = Date.now();
-  const [user, sessions, consents, watch, bids, events] = await c.env.DB.batch([
-    c.env.DB.prepare(
-      `SELECT id, name, email, "emailVerified", role, "createdAt", "updatedAt" FROM "user" WHERE id = ?`,
-    ).bind(userId),
-    c.env.DB.prepare(
-      `SELECT "createdAt", "expiresAt", "ipAddress", "userAgent" FROM "session"
+  const [user, sessions, consents, watch, bids, events, purchases, payments, deposits] =
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        `SELECT id, name, email, "emailVerified", role, "createdAt", "updatedAt" FROM "user" WHERE id = ?`,
+      ).bind(userId),
+      c.env.DB.prepare(
+        `SELECT "createdAt", "expiresAt", "ipAddress", "userAgent" FROM "session"
        WHERE "userId" = ? AND "expiresAt" > ? ORDER BY "createdAt" DESC LIMIT 100`,
-    ).bind(userId, new Date(now).toISOString()),
-    c.env.DB.prepare(
-      `SELECT purpose, version, at FROM consents WHERE user_id = ? ORDER BY at, id`,
-    ).bind(userId),
-    c.env.DB.prepare(
-      `SELECT w.auction_id, l.title, w.created_at FROM watchlist w
+      ).bind(userId, new Date(now).toISOString()),
+      c.env.DB.prepare(
+        `SELECT purpose, version, at FROM consents WHERE user_id = ? ORDER BY at, id`,
+      ).bind(userId),
+      c.env.DB.prepare(
+        `SELECT w.auction_id, l.title, w.created_at FROM watchlist w
        LEFT JOIN auction_listings l ON l.auction_id = w.auction_id
        WHERE w.user_id = ? ORDER BY w.created_at DESC`,
-    ).bind(userId),
-    c.env.DB.prepare(
-      `SELECT u.auction_id, l.title, u.highest_amount_minor, u.updated_at, r.status, r.outcome,
+      ).bind(userId),
+      c.env.DB.prepare(
+        `SELECT u.auction_id, l.title, u.highest_amount_minor, u.updated_at, r.status, r.outcome,
          (r.status = 'ENDED' AND r.outcome = 'SOLD' AND r.winner_user_id = u.user_id) AS won
        FROM user_bids_rm u
        LEFT JOIN auctions_rm r ON r.id = u.auction_id
        LEFT JOIN auction_listings l ON l.auction_id = u.auction_id
        WHERE u.user_id = ? ORDER BY u.updated_at DESC`,
-    ).bind(userId),
-    c.env.DB.prepare(
-      `SELECT type, created_at, request_id FROM security_events
+      ).bind(userId),
+      c.env.DB.prepare(
+        `SELECT type, created_at, request_id FROM security_events
        WHERE user_id = ? ORDER BY created_at DESC LIMIT 1000`,
-    ).bind(userId),
-  ]);
+      ).bind(userId),
+      c.env.DB.prepare(
+        `SELECT id, auction_id, title, status, price_minor FROM settlements WHERE buyer_user_id = ? ORDER BY created_at`,
+      ).bind(userId),
+      c.env.DB.prepare(
+        `SELECT p.settlement_id, p.amount_minor, p.method, p.reference, p.status, p.reported_at
+       FROM settlement_payments p JOIN settlements s ON s.id = p.settlement_id
+       WHERE s.buyer_user_id = ? ORDER BY p.reported_at`,
+      ).bind(userId),
+      c.env.DB.prepare(
+        `SELECT amount_minor, method, reference, status, created_at FROM deposits WHERE user_id = ? ORDER BY created_at`,
+      ).bind(userId),
+    ]);
   const u = (user?.results[0] ?? null) as UserRow | null;
   if (!u) throw new AppError("AUTH_REQUIRED", "Sign in to continue");
 
@@ -230,6 +242,54 @@ accountRoutes.get("/me/export", requireUser, async (c) => {
       };
     }),
     maxBids,
+    purchases: (
+      (purchases?.results ?? []) as {
+        id: string;
+        auction_id: string;
+        title: string;
+        status: string;
+        price_minor: number;
+      }[]
+    ).map((s) => ({
+      settlementId: s.id,
+      auctionId: s.auction_id,
+      title: s.title,
+      status: s.status,
+      priceMinor: s.price_minor,
+      payments: (
+        (payments?.results ?? []) as {
+          settlement_id: string;
+          amount_minor: number;
+          method: string;
+          reference: string;
+          status: string;
+          reported_at: number;
+        }[]
+      )
+        .filter((p) => p.settlement_id === s.id)
+        .map((p) => ({
+          amountMinor: p.amount_minor,
+          method: p.method,
+          reference: p.reference,
+          status: p.status,
+          reportedAt: p.reported_at,
+        })),
+    })),
+    deposits: (
+      (deposits?.results ?? []) as {
+        amount_minor: number;
+        method: string;
+        reference: string;
+        status: string;
+        created_at: number;
+      }[]
+    ).map((d) => ({
+      amountMinor: d.amount_minor,
+      method: d.method,
+      reference: d.reference,
+      status: d.status,
+      createdAt: d.created_at,
+    })),
     securityEvents: (events?.results ?? []).map((r) => {
       const e = r as { type: string; created_at: number; request_id: string };
       return { type: e.type, at: e.created_at, requestId: e.request_id };
@@ -371,6 +431,27 @@ accountRoutes.delete("/me", requireUser, async (c) => {
     );
   }
 
+  // Money first: an open purchase or a deposit we still hold must be settled before erasure.
+  const [owing, held] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `SELECT 1 FROM settlements WHERE buyer_user_id = ?
+         AND (status IN ('OFFERED','AWAITING_INITIAL','AWAITING_BALANCE','PAID')
+              OR (refund_due_minor > 0 AND refunded_at IS NULL)) LIMIT 1`,
+    ).bind(me.id),
+    c.env.DB.prepare(
+      `SELECT 1 FROM deposits WHERE user_id = ? AND status IN ('PENDING','HELD','APPLIED','REFUND_REQUESTED') LIMIT 1`,
+    ).bind(me.id),
+  ]);
+  if ((owing?.results?.length ?? 0) > 0 || (held?.results?.length ?? 0) > 0) {
+    throw new AppError(
+      "CONFLICT",
+      (owing?.results?.length ?? 0) > 0
+        ? "You have a purchase or a refund still in progress. You can delete your account once it's complete."
+        : "We still hold a deposit for you. Ask for it back (Account → Deposit), then delete your account.",
+      { blockers: [] },
+    );
+  }
+
   const since = Date.now() - SETTLEMENT_WINDOW_MS;
   let candidates: Candidate[];
   let retirement: Awaited<ReturnType<typeof retireEverywhere>>;
@@ -457,6 +538,14 @@ accountRoutes.delete("/me", requireUser, async (c) => {
     db.prepare(`DELETE FROM consents WHERE user_id = ?`).bind(me.id),
     db.prepare(`DELETE FROM login_throttle WHERE key = ?`).bind(throttleKey),
     db.prepare(`UPDATE user_bids_rm SET user_id = ? WHERE user_id = ?`).bind(tombstone, me.id),
+    db
+      .prepare(`UPDATE settlements SET buyer_user_id = ? WHERE buyer_user_id = ?`)
+      .bind(tombstone, me.id),
+    db
+      .prepare(`UPDATE settlement_payments SET reported_by = ? WHERE reported_by = ?`)
+      .bind(tombstone, me.id),
+    db.prepare(`UPDATE deposits SET user_id = ? WHERE user_id = ?`).bind(tombstone, me.id),
+    db.prepare(`DELETE FROM bidder_flags WHERE user_id = ?`).bind(me.id),
     db.prepare(`DELETE FROM "user" WHERE id = ?`).bind(me.id),
   ]);
   c.get("log").info("account.deleted", { bidRowsAnonymised: bidRows?.n ?? 0 });

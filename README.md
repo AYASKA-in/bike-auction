@@ -47,6 +47,10 @@ server" with its own SQLite database. Concurrent bids therefore get one provable
   - **Anti-sniping:** a late bid extends the deadline by 2 minutes, capped at 30 minutes in total.
   - **Results:** confirmed by the server, never by the browser's clock.
 - **My Bids** (Leading / Outbid / Won / Lost) and **Watchlist**.
+- **Paying for a win** ([`docs/settlement.md`](docs/settlement.md)):
+  - pay 25% within 24 hours and the balance (plus a 2% fee and 18% GST on it) by day 15;
+  - report the UPI or bank transfer reference, then collect the bike with a gate-pass code;
+  - optional refundable deposit (₹5k / ₹10k / ₹25k) that sets a 10× buying limit.
 - **Account:** consent recorded at sign-up, data export, and account deletion. Deletion keeps auction history intact.
 - **Interface:** light, dark and system themes, mobile-first layouts, WCAG 2.x AA (axe-checked).
 
@@ -58,6 +62,10 @@ server" with its own SQLite database. Concurrent bids therefore get one provable
 - **Live operations:** health, viewers, sync lag, backlog and warnings.
 - **Per-auction view:** bid ledger, timers and recovery actions.
 - **Audit trail** with filters.
+- **Settlements and deposits:**
+  - verify reported payments; record cash payments (dual control above ₹50,000);
+  - extend a deadline once, by up to 72 hours;
+  - after a default: offer to the runner-up or relist; reinstate suspended bidders.
 
 **Engineering**
 
@@ -188,7 +196,7 @@ health. Full checklist, flags (`--demo`, `--with-r2`, `--test-turnstile`), smoke
 
 - **Photos:** stored in R2 when it is enabled, otherwise in Workers KV (free plan, no payment method; about 1,000
   uploads a day). No photos are bundled; listings show a placeholder until an admin uploads one.
-- **Missing account features:** no email provider (so no email verification or password reset), no payments, no KYC.
+- **Missing account features:** no email provider (so no email verification or password reset), no payment gateway (transfers are matched by reference by an admin), no KYC.
 - **Sessions:** they slide forward for 7 days; there is no absolute cap.
 - **Approximate limits:** some limits apply per Cloudflare location, so they're approximate. Other residual risks
   are in [`docs/threat-model.md`](docs/threat-model.md) § 6.

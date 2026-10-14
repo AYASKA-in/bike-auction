@@ -228,9 +228,12 @@ function BidRow({ b, tab, userId }: { b: MyBidCard; tab: MyBidsTab; userId: stri
           </p>
         )}
         {tab === "won" && (
-          <p className="w-full text-sm font-semibold text-ledger sm:max-w-64 sm:text-right">
-            Our team will contact you about payment and collection.
-          </p>
+          <Link
+            to="/me/purchases"
+            className="inline-flex min-h-11 w-full items-center justify-end gap-1 text-sm font-semibold text-ledger underline underline-offset-4 sm:max-w-64"
+          >
+            Payment and collection: My purchases <span aria-hidden="true">→</span>
+          </Link>
         )}
       </div>
     </article>

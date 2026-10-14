@@ -445,9 +445,14 @@ function Kpi({
 }
 
 /** Secondary navigation between the admin areas (keeps the global app shell untouched). */
-export function AdminNav({ current }: { current: "desk" | "ops" | "audit" | "bikes" }) {
+export function AdminNav({
+  current,
+}: {
+  current: "desk" | "ops" | "audit" | "bikes" | "settlements";
+}) {
   const items = [
     { key: "desk", to: "/admin", label: "Auction desk" },
+    { key: "settlements", to: "/admin/settlements", label: "Settlements" },
     { key: "ops", to: "/admin/ops", label: "Live ops" },
     { key: "audit", to: "/admin/audit", label: "Audit trail" },
     { key: "bikes", to: "/admin/bikes", label: "Motorcycles" },

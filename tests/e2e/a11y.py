@@ -61,11 +61,11 @@ with sync_playwright() as p:
             check(anon, f"{label}/anon", f"/auctions/{ended}")
         buyer = browser.new_context(**ctx_args).new_page()
         login(buyer, "Buyer A")
-        for path in [f"/auctions/{live}", "/me/bids", "/me/watchlist"]:
+        for path in [f"/auctions/{live}", "/me/bids", "/me/watchlist", "/me/purchases", "/me/deposit"]:
             check(buyer, f"{label}/buyer", path)
         admin = browser.new_context(**ctx_args).new_page()
         login(admin, "Admin")
-        for path in ["/admin", "/admin/bikes", "/admin/bikes/new"]:
+        for path in ["/admin", "/admin/bikes", "/admin/bikes/new", "/admin/settlements", "/admin/deposits"]:
             check(admin, f"{label}/admin", path)
     browser.close()
 

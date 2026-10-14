@@ -1,4 +1,5 @@
 import type { PublicAuctionView } from "@bike/contracts";
+import { Link } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
 import { CheckIcon } from "./icons";
 import { outcomeCopy } from "./logic";
@@ -24,6 +25,14 @@ export function OutcomeCard({ view }: { view: PublicAuctionView }) {
         {c.headline}
       </p>
       {c.detail && <p className="mt-1 text-sm">{c.detail}</p>}
+      {won && (
+        <Link
+          to="/me/purchases"
+          className="mt-2 inline-flex min-h-11 items-center gap-1 font-semibold underline underline-offset-4"
+        >
+          Complete your purchase <span aria-hidden="true">→</span>
+        </Link>
+      )}
     </section>
   );
 }

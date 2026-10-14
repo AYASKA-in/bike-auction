@@ -2,6 +2,7 @@ import { IdempotencyKeyHeader, PlaceBidBody, SetMaxBidBody, type ErrorCode } fro
 import type { StoredBidResult, StoredMaxBidResult } from "@bike/domain";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
+import { eligibility } from "../settlement/service";
 import { AppError, problemBody, problemResponse } from "../lib/problem";
 import { isOriginAllowed } from "../middleware/security";
 import { loadSession, requireUser } from "../middleware/session";
@@ -106,6 +107,16 @@ auctionRoutes.post("/:id/bids", requireUser, async (c) => {
     }
   }
 
+  const elig = await eligibility(c.env, user.id);
+  if (!elig.canBid)
+    throw new AppError("FORBIDDEN", elig.blockedReason ?? "You can't bid right now.");
+  if (elig.buyingLimitMinor !== null && body.data.amountMinor > elig.buyingLimitMinor) {
+    throw new AppError(
+      "FORBIDDEN",
+      `Your buying limit is ₹${(elig.buyingLimitMinor / 100).toLocaleString("en-IN")} (10× your deposit). Add to your deposit to bid higher.`,
+      { buyingLimitMinor: elig.buyingLimitMinor },
+    );
+  }
   const r = await auctionStub(c.env, id).placeBid({
     userId: user.id,
     amountMinor: body.data.amountMinor,
@@ -172,6 +183,16 @@ auctionRoutes.put("/:id/max-bid", requireUser, async (c) => {
     }
   }
 
+  const elig = await eligibility(c.env, user.id);
+  if (!elig.canBid)
+    throw new AppError("FORBIDDEN", elig.blockedReason ?? "You can't bid right now.");
+  if (elig.buyingLimitMinor !== null && body.data.maxMinor > elig.buyingLimitMinor) {
+    throw new AppError(
+      "FORBIDDEN",
+      `Your buying limit is ₹${(elig.buyingLimitMinor / 100).toLocaleString("en-IN")} (10× your deposit). Add to your deposit to bid higher.`,
+      { buyingLimitMinor: elig.buyingLimitMinor },
+    );
+  }
   const r = await auctionStub(c.env, id).setMaxBid({
     userId: user.id,
     maxMinor: body.data.maxMinor,

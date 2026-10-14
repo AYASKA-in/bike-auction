@@ -7,3 +7,4 @@ export * from "./me";
 export * from "./ops";
 export * from "./system";
 export * from "./ws";
+export * from "./settlement";

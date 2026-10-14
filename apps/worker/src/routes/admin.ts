@@ -5,6 +5,7 @@ import { requireAdmin } from "../middleware/session";
 import { adminAuctionRoutes } from "./admin-auctions";
 import { adminBikeRoutes } from "./admin-bikes";
 import { adminOpsRoutes } from "./admin-ops";
+import { adminSettlementRoutes } from "./admin-settlement";
 import { EFFECTIVE } from "./catalogue";
 import type { AppEnv } from "../types";
 
@@ -58,3 +59,4 @@ adminRoutes.get("/security-events", async (c) => {
 adminRoutes.route("/", adminOpsRoutes);
 adminRoutes.route("/", adminAuctionRoutes);
 adminRoutes.route("/", adminBikeRoutes);
+adminRoutes.route("/", adminSettlementRoutes);

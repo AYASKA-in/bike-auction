@@ -59,16 +59,16 @@ dashboard (free) before the first deploy.
 
 ## What the script does, and what each step needs
 
-| Step            | Details                                                                                                                                                                                                                                                                    | Verified               |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| D1 database     | `wrangler d1 create bike-auction` if missing; writes its id into `wrangler.jsonc`                                                                                                                                                                                          | ⏳                     |
-| Build           | `pnpm build` (SPA + Worker bundle)                                                                                                                                                                                                                                         | ✅                     |
-| Migrations      | `wrangler d1 migrations apply DB --remote` (0001–0006)                                                                                                                                                                                                                     | ✅ local · ⏳ remote   |
-| Durable Objects | `AuctionDO`, `PasswordHasherDO` (SQLite-backed, declared in `wrangler.jsonc` migrations)                                                                                                                                                                                   | ✅ local · ⏳ remote   |
-| Bindings        | `DB` (D1), `AUCTION`/`PASSWORD_HASHER` (DO), `ASSETS`, `AUTH_RATE_LIMIT`/`BID_RATE_LIMIT` (Rate Limiting), `METRICS` (Analytics Engine, optional, free), `PHOTOS` (Workers KV, photos), `IMAGES` (R2, only with `--with-r2`; preferred when bound), daily cron (retention) | ✅ dry run · ⏳ remote |
-| Secrets         | Generated once and kept in `apps/worker/.deploy-secrets.json` (git-ignored): `BETTER_AUTH_SECRET`, `PSEUDONYM_SECRET`, `SEED_TOKEN`; plus your `TURNSTILE_SECRET_KEY`. Set with `wrangler secret bulk`.                                                                    | ⏳                     |
-| Vars            | `ENVIRONMENT=production`, `APP_VERSION=<git sha>`, `TURNSTILE_SITE_KEY`, `DEMO_MODE=false` (true only with `--demo`), retention periods                                                                                                                                    | ✅                     |
-| Health          | Waits until `/api/v1/status` reports the new version                                                                                                                                                                                                                       | ⏳                     |
+| Step            | Details                                                                                                                                                                                                                                                                                                   | Verified               |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| D1 database     | `wrangler d1 create bike-auction` if missing; writes its id into `wrangler.jsonc`                                                                                                                                                                                                                         | ⏳                     |
+| Build           | `pnpm build` (SPA + Worker bundle)                                                                                                                                                                                                                                                                        | ✅                     |
+| Migrations      | `wrangler d1 migrations apply DB --remote` (0001–0007)                                                                                                                                                                                                                                                    | ✅ local · ⏳ remote   |
+| Durable Objects | `AuctionDO`, `PasswordHasherDO` (SQLite-backed, declared in `wrangler.jsonc` migrations)                                                                                                                                                                                                                  | ✅ local · ⏳ remote   |
+| Bindings        | `DB` (D1), `AUCTION`/`PASSWORD_HASHER` (DO), `ASSETS`, `AUTH_RATE_LIMIT`/`BID_RATE_LIMIT` (Rate Limiting), `METRICS` (Analytics Engine, optional, free), `PHOTOS` (Workers KV, photos), `IMAGES` (R2, only with `--with-r2`; preferred when bound), crons: daily retention + settlement sweep every 5 min | ✅ dry run · ⏳ remote |
+| Secrets         | Generated once and kept in `apps/worker/.deploy-secrets.json` (git-ignored): `BETTER_AUTH_SECRET`, `PSEUDONYM_SECRET`, `SEED_TOKEN`; plus your `TURNSTILE_SECRET_KEY`. Set with `wrangler secret bulk`.                                                                                                   | ⏳                     |
+| Vars            | `ENVIRONMENT=production`, `APP_VERSION=<git sha>`, `TURNSTILE_SITE_KEY`, `DEMO_MODE=false` (true only with `--demo`), retention periods, settlement vars (below)                                                                                                                                          | ✅                     |
+| Health          | Waits until `/api/v1/status` reports the new version                                                                                                                                                                                                                                                      | ⏳                     |
 
 Production safety built in:
 
@@ -76,6 +76,23 @@ Production safety built in:
   can't be silently disabled.
 - Session cookies are `Secure` on HTTPS.
 - HSTS is sent only over HTTPS.
+
+## Settlement (migration 0007)
+
+The redeploy after the settlement change applies migration `0007_settlement.sql` and adds a `*/5 * * * *` cron
+(free plan: up to 5 cron triggers). Only auctions that close **after** the migration runs get a settlement
+(`settlement_config.opens_from`); earlier sales are left alone. Set these vars in `wrangler.jsonc` (or the
+dashboard) before announcing the rule. They are not secrets, so they're visible in the config:
+
+| Var                         | Default | Set it to                                                  |
+| --------------------------- | ------- | ---------------------------------------------------------- |
+| `PAYMENT_UPI_ID`            | empty   | Your business UPI ID, shown to winners                     |
+| `PAYMENT_BANK_DETAILS`      | empty   | Account name, number and IFSC, shown to winners            |
+| `REQUIRE_DEPOSIT`           | `false` | `true` to require a verified deposit before any bid        |
+| `BLOCK_BIDDING_WHILE_OWING` | `true`  | `false` to let buyers keep bidding while a payment is owed |
+
+With both payment vars empty, buyers see "Our team will share the payment details". Rules and admin
+actions: [`settlement.md`](settlement.md).
 
 ## Initial administrator
 

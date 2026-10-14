@@ -15,6 +15,7 @@ import { catalogueRoutes } from "./routes/catalogue";
 import { authRoutes } from "./routes/auth";
 import { internalRoutes } from "./routes/internal";
 import { configRoutes, meRoutes } from "./routes/me";
+import { settlementRoutes } from "./routes/settlement";
 import { systemRoutes } from "./routes/system";
 import { spikeRoutes } from "./spikes/routes";
 import type { AppEnv } from "./types";
@@ -42,6 +43,7 @@ export function createApp() {
   v1.use("/admin/*", adminWriteLimit);
   v1.use("/auctions/:id/stream", wsConnectLimit);
   v1.route("/", accountRoutes); // GET /me/account, GET /me/export, DELETE /me (DPDP rights)
+  v1.route("/", settlementRoutes); // /me/purchases, /me/deposit, /me/eligibility
   v1.route("/", meRoutes);
   v1.route("/admin", adminRoutes);
   v1.route("/", catalogueRoutes); // GET /auctions (list), /auctions/:id/details, /images/*, /catalogue/facets

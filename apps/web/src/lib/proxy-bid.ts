@@ -54,7 +54,8 @@ export function maxBidErrorMessage(e: unknown): string {
     return "We couldn't confirm your maximum. Press Retry: it resends the same request and can't apply it twice.";
   const map: Partial<Record<string, string>> = {
     AUTH_REQUIRED: "Your session has expired. Sign in again to set a maximum.",
-    FORBIDDEN: "This account can't bid.",
+    // The server's reason is written for the buyer (pay first, buying limit, account paused).
+    FORBIDDEN: e.detail ?? "This account can't bid.",
     BID_TOO_LOW: "The price has moved. Your maximum must be at least the new minimum bid.",
     BID_UNREASONABLE: "That's far above the current price. Check the amount.",
     BID_INVALID_AMOUNT: "Enter a valid amount in whole rupees.",

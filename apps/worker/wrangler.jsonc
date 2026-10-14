@@ -49,8 +49,8 @@
   // billed; the dataset is created on first write. Optional at runtime: unbound → metrics no-op.
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "bike_auction_metrics" }],
   // Daily data-retention purge (src/lib/retention.ts) at 21:47 UTC = 03:17 IST, off-peak.
-  // Cron Triggers are included in the Free plan.
-  "triggers": { "crons": ["47 21 * * *"] },
+  // Every 5 min: settlement deadlines (src/settlement/service.ts). Cron Triggers are on the Free plan.
+  "triggers": { "crons": ["47 21 * * *", "*/5 * * * *"] },
 
   // Coarse, per-location, eventually consistent edge limits (BLUEPRINT §7.5).
   // Key prefixes per use and the full endpoint table: docs/threat-model.md → Rate limits.
@@ -77,5 +77,14 @@
     "RETENTION_LOGIN_THROTTLE_HOURS": "24",
     "RETENTION_ACCOUNT_DELETIONS_DAYS": "365",
     "RETENTION_ORPHAN_UPLOAD_HOURS": "24",
+    // Settlement (docs/settlement.md): "true" = a participation deposit is required to bid (buying
+    // limit 10x the deposit). Off by default so evaluators can bid without paying anything.
+    "REQUIRE_DEPOSIT": "false",
+    // "true" = a buyer who owes a payment can't bid elsewhere until it's paid (the real-world rule).
+    // Browser/load tests that reuse winners across scenarios start wrangler dev with it "false".
+    "BLOCK_BIDDING_WHILE_OWING": "true",
+    // Where buyers pay (shown on My purchases). Empty = "our team will share payment details".
+    "PAYMENT_UPI_ID": "",
+    "PAYMENT_BANK_DETAILS": "",
   },
 }

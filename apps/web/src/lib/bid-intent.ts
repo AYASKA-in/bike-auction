@@ -90,7 +90,8 @@ export function bidErrorMessage(e: unknown): string {
   }
   const map: Partial<Record<string, string>> = {
     AUTH_REQUIRED: "Your session has expired. Sign in again to bid.",
-    FORBIDDEN: "This account can't bid.",
+    // The server's reason is written for the buyer (pay first, buying limit, account paused).
+    FORBIDDEN: e.detail ?? "This account can't bid.",
     ALREADY_LEADING: "You already have the highest bid.",
     BID_INVALID_AMOUNT: "Enter a valid amount in whole rupees.",
     AUCTION_ENDED: "This auction has ended.",

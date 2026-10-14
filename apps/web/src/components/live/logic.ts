@@ -155,8 +155,8 @@ export function outcomeCopy(
       if (v.viewer?.isWinner)
         return {
           title: "You won",
-          headline: `You won at ${formatINR(price ?? 0)}. Our team will contact you.`,
-          detail: "Payment, paperwork and pickup are arranged directly with our team.",
+          headline: `You won at ${formatINR(price ?? 0)}.`,
+          detail: "Pay 25% within 24 hours to secure it; the balance is due within 15 days.",
           tone: "won",
         };
       return {
